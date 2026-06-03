@@ -50,7 +50,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/korylus/korylus-tools/internal/cli"
+	"github.com/korylus/tools/internal/cli"
 )
 
 var (

@@ -31,7 +31,7 @@ For `md`, `--all` checks every `.md` file in full instead of only changed lines,
 
 Each project pins a version of `koryluslint` to fetch it.
 
-- Go projects: pin `github.com/korylus/korylus-tools/cmd/koryluslint` with the `tool` directive in `go.mod` and run it with `go tool koryluslint ...`.
+- Go projects: pin `github.com/korylus/tools/cmd/koryluslint` with the `tool` directive in `go.mod` and run it with `go tool koryluslint ...`.
 - Non-Go projects: pin it with mise's `go:` backend.
 
 ## Development

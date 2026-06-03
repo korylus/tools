@@ -19,8 +19,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/korylus/korylus-tools/internal/comment"
-	"github.com/korylus/korylus-tools/internal/md"
+	"github.com/korylus/tools/internal/comment"
+	"github.com/korylus/tools/internal/md"
 )
 
 // usageText is shown for invalid arguments or -h.
