@@ -31,7 +31,7 @@ koryluslint md [-base=<ref>] [--all] [--write] [paths...]
 
 各プロジェクトはバージョンを固定して `koryluslint` を取得します。
 
-- Go プロジェクト: `go.mod` の tool ディレクティブで `github.com/korylus/korylus-tools/cmd/koryluslint` を固定し、`go tool koryluslint ...` で実行する
+- Go プロジェクト: `go.mod` の tool ディレクティブで `github.com/korylus/tools/cmd/koryluslint` を固定し、`go tool koryluslint ...` で実行する
 - 非 Go プロジェクト: mise の `go:` バックエンドで固定取得する
 
 ## 開発

@@ -1,3 +1,3 @@
-module github.com/korylus/korylus-tools
+module github.com/korylus/tools
 
 go 1.26
