@@ -1,0 +1,5 @@
+.DS_Store
+
+/.pnpm-store
+/bin
+/node_modules
