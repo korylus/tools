@@ -1,16 +1,22 @@
 // Package comment implements the comment subcommand of koryluslint, which
 // checks that bilingual code comments use the [Ja] marker correctly. The
 // marker introduces the Japanese translation block, which must sit below a
-// corresponding English block and appear at most once per comment group. The
-// check targets the recurring *misuse* of the marker rather than enforcing
-// full bilingual coverage, which keeps false positives near zero.
+// corresponding English block and appear at most once per comment group.
+// When the English block spans multiple lines, one blank comment line must
+// separate it from the marker; when it is a single line, no blank line is
+// allowed. The check targets the recurring *misuse* of the marker rather than
+// enforcing full bilingual coverage, which keeps false positives near zero;
+// for the same reason the blank-line check skips comment groups that contain
+// lines it cannot classify as English or Japanese (separators, code examples,
+// URL-only lines, and the like).
 //
 // Two modes:
 //
 //	comment [paths...]              checks the [Ja]-on-non-Japanese rule across
 //	                                the whole tree (default: ".").
-//	comment -base=<ref> [paths...]  also checks the marker-placement rules,
-//	                                limited to lines added since <ref>.
+//	comment -base=<ref> [paths...]  also checks the marker-placement and
+//	                                blank-line rules, limited to lines added
+//	                                since <ref>.
 //
 // .go files are parsed via go/parser so that "//" inside string literals is
 // never mistaken for a comment; .templ files (not valid Go) are scanned by line.
@@ -18,15 +24,18 @@
 // [Ja] comment パッケージは koryluslint の comment サブコマンドを実装し、
 // コードコメントの英日併記で `[Ja]` マーカーが正しく使われているかをチェックする。
 // `[Ja]` は日本語訳ブロックの冒頭を示すマーカーで、対応する英語ブロックの下に置き、
-// 1 コメント群に 1 つだけ付ける。全併記の強制ではなく、再発している「マーカーの誤用」
-// のみを対象にすることで誤検出をほぼゼロに保つ。
+// 1 コメント群に 1 つだけ付ける。英語ブロックが複数行のときはマーカーとの間に
+// 空行 (コメント記号のみの行) を 1 行置き、1 行のときは空行を置かない。
+// 全併記の強制ではなく、再発している「マーカーの誤用」のみを対象にすることで
+// 誤検出をほぼゼロに保つ。同じ理由で、空行の検査は英語とも日本語とも判定できない行
+// (区切り線・コード例・URL のみの行など) を含むコメント群をスキップする。
 //
 // モードは 2 つ:
 //
 //	comment [paths...]              「[Ja] が日本語を含まない行に付く」誤用を
 //	                                ツリー全体で検査する (既定は ".")。
-//	comment -base=<ref> [paths...]  マーカー配置の規則も検査する。<ref> 以降に
-//	                                追加された行に限定する。
+//	comment -base=<ref> [paths...]  マーカー配置・空行の規則も検査する。<ref>
+//	                                以降に追加された行に限定する。
 //
 // .go は go/parser で解析し、文字列リテラル中の "//" をコメントと誤認しない。
 // .templ (Go として不正) は行単位で走査する。
@@ -63,6 +72,9 @@ var (
 	// reGenerated matches the standard "generated; do not edit" header.
 	// [Ja] reGenerated は「生成物・編集禁止」の定型ヘッダーにマッチする。
 	reGenerated = regexp.MustCompile(`^//\s*Code generated .* DO NOT EDIT\.$`)
+	// reURLOnly matches a line whose whole content is a single URL.
+	// [Ja] reURLOnly は本文全体が 1 つの URL である行にマッチする。
+	reURLOnly = regexp.MustCompile(`^https?://\S+$`)
 )
 
 // commentLine is a single physical line of a comment with its 1-based line number.
@@ -81,10 +93,27 @@ type finding struct {
 	msg  string
 }
 
+// lineKind classifies a non-marker comment line for the blank-line check
+// (condition 4).
+//
+// [Ja] lineKind は空行検査 (条件 4) のために非マーカー行を分類した種別。
+type lineKind int
+
 const (
-	msgCond1 = "[Ja] marker on a line with no Japanese text; it must lead the Japanese translation, not the English block / [Ja] マーカーが日本語を含まない行に付いている"
-	msgCond2 = "[Ja] marker has no English block above it; write the English block first, then [Ja] / [Ja] の上に対応する英語ブロックが無い"
-	msgCond3 = "[Ja] marker appears more than once in one comment block; mark only the first line of the Japanese block / [Ja] マーカーが 1 コメント群に複数ある"
+	kindNone     lineKind = iota // no line seen yet. [Ja] まだ行が無い
+	kindBlank                    // comment leader only, empty content. [Ja] コメント記号のみで本文が空
+	kindEnglish                  // English text. [Ja] 英文
+	kindJapanese                 // Japanese text. [Ja] 日本語文
+	kindOther                    // neither English nor Japanese (separator, code, URL). [Ja] 英文とも日本語とも判定できない
+	kindMarker                   // a [Ja] marker line. [Ja] マーカー行
+)
+
+const (
+	msgCond1  = "[Ja] marker on a line with no Japanese text; it must lead the Japanese translation, not the English block / [Ja] マーカーが日本語を含まない行に付いている"
+	msgCond2  = "[Ja] marker has no English block above it; write the English block first, then [Ja] / [Ja] の上に対応する英語ブロックが無い"
+	msgCond3  = "[Ja] marker appears more than once in one comment block; mark only the first line of the Japanese block / [Ja] マーカーが 1 コメント群に複数ある"
+	msgCond4a = "[Ja] marker after a multi-line English block needs one blank comment line right above it / [Ja] 英語ブロックが複数行のときはマーカーの直前に空行が必要"
+	msgCond4b = "[Ja] marker after a one-line English comment must not have a blank line above it / [Ja] 英語ブロックが 1 行のときはマーカーの直前に空行を入れない"
 )
 
 // Run is the entry point of the comment subcommand. args is what remains after
@@ -213,23 +242,50 @@ func collectFindings(roots []string, base string, stderr io.Writer) ([]finding, 
 // Only lines whose comment content *begins* with the [Ja] marker count as
 // marker lines; a mid-sentence mention of "[Ja]" in English prose (such as this
 // tool's own docs) is ignored. At most one finding per marker line is produced
-// (condition 1 supersedes condition 2 on the same line); condition 3 is reported
-// independently.
+// (on the same line condition 1 supersedes condition 2, which supersedes
+// condition 4); condition 3 is reported independently. Condition 4 (the blank
+// line between the English block and the marker) is evaluated only while every
+// line above the marker classifies as English, Japanese, or blank; one
+// unclassifiable line (separator, code example, URL-only) disables it for the
+// rest of the group, and so does a second marker (condition 3 already reports
+// the broken structure, where any blank-line judgement would be a guess).
 //
 // [Ja] checkGroup は 1 コメント群を [Ja] マーカー規則で評価する。
 // コメント本文が [Ja] マーカーで「始まる」行だけをマーカー行とみなし、英語の地の文中で
 // "[Ja]" に言及しているだけの行 (本ツール自身の説明など) は無視する。1 マーカー行あたり
-// 最大 1 件 (同じ行では条件 1 が条件 2 に優先する)。条件 3 は独立に報告する。
+// 最大 1 件 (同じ行では条件 1 が条件 2 に、条件 2 が条件 4 に優先する)。条件 3 は独立に
+// 報告する。条件 4 (英語ブロックとマーカーの間の空行) は、マーカーより上の全行が
+// 英文・日本語・空行のいずれかに分類できる間だけ評価し、分類できない行 (区切り線・
+// コード例・URL のみの行) が 1 つでもあれば群の残りでは無効にする。2 つ目以降の
+// マーカーでも同様に無効にする (壊れた構造は条件 3 で報告済みで、そこへの空行判定は
+// 当て推量になるため)。
 func checkGroup(lines []commentLine) []finding {
 	var fs []finding
 	markerCount := 0
 	englishSeenAbove := false
+
+	// State for condition 4: the count of English lines above the marker, the
+	// kind of the previous line, and whether an unclassifiable line was seen.
+	//
+	// [Ja] 条件 4 のための状態: マーカーより上の英文行の数、直前行の種別、
+	// 分類できない行が出現したかどうか。
+	englishAbove := 0
+	prevKind := kindNone
+	unclassifiable := false
 
 	for _, cl := range lines {
 		if !markerAtStart(cl.text) {
 			if isEnglishText(cl.text) {
 				englishSeenAbove = true
 			}
+			kind := classifyLine(cl.text)
+			switch kind {
+			case kindEnglish:
+				englishAbove++
+			case kindOther:
+				unclassifiable = true
+			}
+			prevKind = kind
 			continue
 		}
 
@@ -238,20 +294,83 @@ func checkGroup(lines []commentLine) []finding {
 			fs = append(fs, finding{line: cl.line, cond: 3, msg: msgCond3})
 		}
 
-		if !hasJapanese(cl.text) {
+		switch {
+		case !hasJapanese(cl.text):
 			// Condition 1: the marker leads an English (or marker-only) line.
 			// [Ja] 条件 1: マーカーが英語 (またはマーカーのみ) の行を先導している。
 			fs = append(fs, finding{line: cl.line, cond: 1, msg: msgCond1})
-			continue
-		}
-
-		// Condition 2: a marker line still needs an English block above it.
-		// [Ja] 条件 2: マーカー行でも、その上に英語ブロックが必要。
-		if !englishSeenAbove {
+		case !englishSeenAbove:
+			// Condition 2: a marker line still needs an English block above it.
+			// [Ja] 条件 2: マーカー行でも、その上に英語ブロックが必要。
 			fs = append(fs, finding{line: cl.line, cond: 2, msg: msgCond2})
+		case unclassifiable || markerCount > 1:
+			// Skip condition 4: a line above defies classification, or the
+			// group has more than one marker (already reported as condition
+			// 3), so the blank-line judgement would be a guess. Prefer a
+			// false negative.
+			//
+			// [Ja] 条件 4 をスキップ: 上の行に分類できない行があるか、群に
+			// マーカーが複数あり (条件 3 で報告済み)、空行の判定が当て推量に
+			// なるため。偽陰性側に倒す。
+		case prevKind == kindEnglish && englishAbove >= 2:
+			// Condition 4 (a): a multi-line English block runs straight into
+			// the marker without the separating blank line.
+			//
+			// [Ja] 条件 4 (a): 複数行の英語ブロックが空行を挟まずマーカーに
+			// 連続している。
+			fs = append(fs, finding{line: cl.line, cond: 4, msg: msgCond4a})
+		case prevKind == kindBlank && englishAbove == 1:
+			// Condition 4 (b): a one-line English comment is separated from
+			// the marker by a blank line it must not have.
+			//
+			// [Ja] 条件 4 (b): 1 行の英語コメントとマーカーの間に不要な空行が
+			// 入っている。
+			fs = append(fs, finding{line: cl.line, cond: 4, msg: msgCond4b})
 		}
+		prevKind = kindMarker
 	}
 	return fs
+}
+
+// classifyLine classifies one non-marker comment line for the blank-line
+// check (condition 4). The comment leader is stripped first — "//" or "/*"
+// once, then at most one "*" continuation, so that "/**" classifies as blank
+// while a row of stars ("//****") keeps its content and classifies as
+// kindOther. Content indented with a tab or with two or more spaces after the
+// leader is a code example (prose keeps a single space), and a line whose
+// whole content is a URL is not prose, so both classify as kindOther.
+//
+// [Ja] classifyLine は空行検査 (条件 4) のために非マーカー行を 1 行分類する。
+// 先にコメントリーダーを取り除く。"//" または "/*" を 1 回、続けて継続記号の
+// "*" を高々 1 つだけ除去することで、"/**" は空行扱いにしつつ、星の並び
+// ("//****") は本文が残って kindOther に分類される。リーダー直後がタブまたは
+// スペース 2 つ以上で字下げされた本文はコード例 (地の文はスペース 1 つ)、
+// 本文全体が URL の行は地の文ではないため、いずれも kindOther に分類する。
+func classifyLine(text string) lineKind {
+	s := strings.TrimSpace(text)
+	for _, leader := range []string{"//", "/*"} {
+		if strings.HasPrefix(s, leader) {
+			s = strings.TrimPrefix(s, leader)
+			break
+		}
+	}
+	s = strings.TrimPrefix(s, "*") // at most one "*" continuation. [Ja] 継続記号の "*" は高々 1 つ
+	if strings.HasPrefix(s, "\t") || strings.HasPrefix(s, "  ") {
+		return kindOther
+	}
+	s = strings.TrimSpace(s)
+	switch {
+	case s == "":
+		return kindBlank
+	case reURLOnly.MatchString(s):
+		return kindOther
+	case hasJapanese(s):
+		return kindJapanese
+	case isEnglishText(s):
+		return kindEnglish
+	default:
+		return kindOther
+	}
 }
 
 // markerAtStart reports whether the comment content begins with the [Ja] marker,

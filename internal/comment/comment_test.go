@@ -45,13 +45,22 @@ func TestCheckGroup(t *testing.T) {
 		wantConds []int
 	}{
 		{
-			name:      "correct multi-line block",
-			lines:     group("// New post form.", "//", "// [Ja] 新規投稿フォーム。"),
+			name: "correct multi-line block",
+			// Two English lines, then a blank comment line, then the marker.
+			// [Ja] 英文 2 行 → 空行 → マーカーの正しい形。
+			lines:     group("// New post form.", "// It renders the editor.", "//", "// [Ja] 新規投稿フォーム。", "// エディタを表示する。"),
 			wantConds: nil,
 		},
 		{
 			name:      "correct one-line pair",
 			lines:     group("// Hash the password.", "// [Ja] パスワードをハッシュ化する。"),
+			wantConds: nil,
+		},
+		{
+			name: "correct multi-paragraph English block",
+			// English paragraphs count as one block across the paragraph break.
+			// [Ja] 段落区切りをまたいでも英語ブロックは 1 つとして数える。
+			lines:     group("// First paragraph.", "//", "// Second paragraph here.", "//", "// [Ja] 最初の段落。", "//", "// 2 つ目の段落。"),
 			wantConds: nil,
 		},
 		{
@@ -104,6 +113,62 @@ func TestCheckGroup(t *testing.T) {
 			lines:     group("// English.", "// [Ja] 日本語。", "// [Ja] second english marker."),
 			wantConds: []int{3, 1},
 		},
+		{
+			name: "missing blank line after a multi-line English block (4a)",
+			// Two English lines run straight into the marker (the §2.1.2 violation).
+			// [Ja] 英文 2 行が空行なしでマーカーに連続している (§2.1.2 違反)。
+			lines:     group("// Render the page title.", "// The site default is appended.", "// [Ja] ページタイトルをレンダリングする。"),
+			wantConds: []int{4},
+		},
+		{
+			name: "unnecessary blank line after a one-line English comment (4b)",
+			// A blank line follows a one-line English comment (the §2.1.5 bad example).
+			// [Ja] 英文 1 行なのに空行を挟んでいる (§2.1.5 の悪い例)。
+			lines:     group("// Hash the password.", "//", "// [Ja] パスワードをハッシュ化する。"),
+			wantConds: []int{4},
+		},
+		{
+			name: "code example above the marker skips condition 4",
+			// The tab-indented code line is unclassifiable, so the missing blank line is not reported.
+			// [Ja] タブ字下げのコード行は分類できないため、空行欠落を報告しない。
+			lines:     group("//\tkoryluslint comment .", "//", "// Run the tool first.", "// Then check the output.", "// [Ja] 先にツールを実行し、出力を確認する。"),
+			wantConds: nil,
+		},
+		{
+			name: "space-indented code example above the marker skips condition 4",
+			// The space-indented code line is unclassifiable, so the missing blank line is not reported.
+			// [Ja] スペース字下げのコード行は分類できないため、空行欠落を報告しない。
+			lines:     group("// Run the tool:", "//   koryluslint comment .", "// [Ja] ツールを実行する。"),
+			wantConds: nil,
+		},
+		{
+			name: "separator line above the marker skips condition 4",
+			// The dash separator is unclassifiable, so the missing blank line is not reported.
+			// [Ja] ダッシュの区切り線は分類できないため、空行欠落を報告しない。
+			lines:     group("// ----", "// Run the tool first.", "// Then check the output.", "// [Ja] 先にツールを実行し、出力を確認する。"),
+			wantConds: nil,
+		},
+		{
+			name: "star-row separator above the marker skips condition 4",
+			// A row of stars is unclassifiable (not a blank line), so condition 4 stays silent.
+			// [Ja] 星のみの区切り線は空行ではなく分類できない行のため、条件 4 を報告しない。
+			lines:     group("// Hash the password.", "//****", "// [Ja] パスワードをハッシュ化する。"),
+			wantConds: nil,
+		},
+		{
+			name: "second marker in a duplicate-marker group does not add condition 4",
+			// The duplicate marker is already condition 3; the blank-line check stays silent for it.
+			// [Ja] 重複マーカーは条件 3 で報告済みのため、空行検査は発火しない。
+			lines:     group("// First pair.", "// [Ja] 最初のペア。", "// Second pair English.", "// [Ja] 二つ目のペア。"),
+			wantConds: []int{3},
+		},
+		{
+			name: "URL-only line above the marker skips condition 4",
+			// A URL-only line is not prose, so condition 4 stays silent for the group.
+			// [Ja] URL のみの行は地の文ではないため、この群では条件 4 を報告しない。
+			lines:     group("// See the upstream issue.", "// https://github.com/golang/go/issues/12345", "// [Ja] 上流の issue を参照。"),
+			wantConds: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -150,6 +215,34 @@ func TestIsEnglishText(t *testing.T) {
 	for _, tt := range tests {
 		if got := isEnglishText(tt.text); got != tt.want {
 			t.Errorf("isEnglishText(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestClassifyLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		text string
+		want lineKind
+	}{
+		{"// Set the CSRF token on the context.", kindEnglish},
+		{"// CSRF トークンを設定する。", kindJapanese},
+		{"//", kindBlank},
+		{"// ", kindBlank},
+		{"/**", kindBlank}, // block-comment opener has no content. [Ja] ブロックコメントの開始行は本文なし
+		{"\t* Renders the page title.", kindEnglish},
+		{"//\tkoryluslint comment .", kindOther},  // godoc-style code block. [Ja] godoc 形式のコード例
+		{"//   koryluslint comment .", kindOther}, // space-indented code example. [Ja] スペース字下げのコード例
+		{"// https://example.com/issues/1", kindOther},
+		{"// ----", kindOther},
+		{"//****", kindOther},                                    // a star row keeps its content, unlike "/**". [Ja] 星の並びは "/**" と違い本文が残る
+		{"*****", kindOther},                                     // a bare star row inside a block comment. [Ja] ブロックコメント内の星のみの区切り線
+		{"// See https://example.com for details.", kindEnglish}, // a URL inside prose stays English. [Ja] 地の文中の URL は英文のまま
+	}
+	for _, tt := range tests {
+		if got := classifyLine(tt.text); got != tt.want {
+			t.Errorf("classifyLine(%q) = %v, want %v", tt.text, got, tt.want)
 		}
 	}
 }
@@ -280,13 +373,14 @@ func TestRunFullMode(t *testing.T) {
 	}
 }
 
-// TestRunNoViolations confirms a clean tree exits 0 with no output. Condition 2
-// (no English block above) is not reported in full mode, so a Japanese-only
-// comment must not trip the check.
+// TestRunNoViolations confirms a clean tree exits 0 with no output. Conditions
+// 2 (no English block above) and 4 (blank line before the marker) are not
+// reported in full mode, so neither a Japanese-only comment nor a missing
+// blank line must trip the check.
 //
 // [Ja] TestRunNoViolations は問題のないツリーが無出力・終了コード 0 になることを
-// 確認する。全体モードでは条件 2 (英語ブロック無し) を報告しないため、日本語のみの
-// コメントで検査が落ちてはならない。
+// 確認する。全体モードでは条件 2 (英語ブロック無し) と条件 4 (マーカー前の空行) を
+// 報告しないため、日本語のみのコメントや空行欠落で検査が落ちてはならない。
 func TestRunNoViolations(t *testing.T) {
 	t.Parallel()
 
@@ -300,6 +394,11 @@ func TestRunNoViolations(t *testing.T) {
 		"",
 		"// [Ja] 日本語のみのコメント。",
 		"func JapaneseOnly() {}",
+		"",
+		"// Wave waves at the user.",
+		"// It never returns an error.",
+		"// [Ja] Wave はユーザーに手を振る (空行欠落だが全体モードでは報告されない)。",
+		"func Wave() {}",
 	}, "\n"))
 
 	var stdout, stderr bytes.Buffer
