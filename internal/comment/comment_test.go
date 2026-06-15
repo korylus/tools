@@ -9,14 +9,15 @@ import (
 	"testing"
 )
 
-// reMarker matches the [Ja] translation marker. It is only needed by tests,
+// reMarker matches the Japanese translation marker. It is only needed by tests,
 // so it lives here rather than in the production code.
 //
-// [Ja] reMarker は [Ja] 翻訳マーカーにマッチする。テストでのみ必要なため、
-// 本番コードではなくこちらに置く。
+// [Ja] reMarker は日本語訳マーカーにマッチする。テストでのみ必要なため、本番コードでは
+// なくこちらに置く。
 var reMarker = regexp.MustCompile(`\[Ja\]`)
 
 // group builds a comment group from raw "//" lines, numbering them from 1.
+//
 // [Ja] group は "//" 行から 1 始まりで番号付けしたコメント群を作る。
 func group(texts ...string) []commentLine {
 	lines := make([]commentLine, len(texts))
@@ -27,6 +28,7 @@ func group(texts ...string) []commentLine {
 }
 
 // condsOf returns the list of condition numbers in findings.
+//
 // [Ja] condsOf は findings に含まれる条件番号の一覧を返す。
 func condsOf(fs []finding) []int {
 	got := make([]int, len(fs))
@@ -45,129 +47,139 @@ func TestCheckGroup(t *testing.T) {
 		wantConds []int
 	}{
 		{
-			name: "correct multi-line block",
-			// Two English lines, then a blank comment line, then the marker.
-			// [Ja] 英文 2 行 → 空行 → マーカーの正しい形。
-			lines:     group("// New post form.", "// It renders the editor.", "//", "// [Ja] 新規投稿フォーム。", "// エディタを表示する。"),
+			name: "correct pair with a blank line between the blocks",
+			// One blank comment line separates the English and Japanese blocks.
+			//
+			// [Ja] 英語ブロックと日本語ブロックを空行 1 行で区切る。
+			lines:     group("// Hash the password.", "//", "// [Ja] パスワードをハッシュ化する。"),
 			wantConds: nil,
 		},
 		{
-			name:      "correct one-line pair",
+			name: "missing blank line between the blocks (8)",
+			// The [Ja] block directly follows the English line, with no blank.
+			//
+			// [Ja] [Ja] ブロックが英語行の直後に続き、空行が無い。
 			lines:     group("// Hash the password.", "// [Ja] パスワードをハッシュ化する。"),
+			wantConds: []int{8},
+		},
+		{
+			name: "correct multi-line block with a blank line between the blocks",
+			// A blank line separates the multi-line English and Japanese blocks.
+			//
+			// [Ja] 複数行でも英日のブロックを空行で区切る。
+			lines:     group("// First line.", "// Second line.", "//", "// [Ja] 最初の行。", "// 2 行目。"),
 			wantConds: nil,
 		},
 		{
-			name: "correct multi-paragraph English block",
-			// English paragraphs count as one block across the paragraph break.
-			// [Ja] 段落区切りをまたいでも英語ブロックは 1 つとして数える。
-			lines:     group("// First paragraph.", "//", "// Second paragraph here.", "//", "// [Ja] 最初の段落。", "//", "// 2 つ目の段落。"),
-			wantConds: nil,
+			name: "missing blank line in a multi-line block (8)",
+			// The [Ja] block directly follows the last English line, with no blank.
+			//
+			// [Ja] [Ja] ブロックが英語最終行の直後に続き、空行が無い。
+			lines:     group("// First line.", "// Second line.", "// [Ja] 最初の行。", "// 2 行目。"),
+			wantConds: []int{8},
 		},
 		{
-			name:      "correct inline pair on a single line",
-			lines:     group("// Hash the password. [Ja] パスワードをハッシュ化する。"),
-			wantConds: nil,
-		},
-		{
-			name: "prose mention of [Ja] in English text is not a marker",
-			// A [Ja] mention inside English prose must not be treated as a marker.
-			// [Ja] 英語の地の文中の [Ja] 言及はマーカー扱いしない。
-			lines:     group("// The [Ja] marker leads the Japanese translation block.", "// [Ja] 日本語訳ブロックを先導するマーカー。"),
-			wantConds: nil,
-		},
-		{
-			name: "marker on an English line (001/003 inversion)",
-			// Japanese leads and the English line carries the marker (the 001/003 inversion).
-			// [Ja] 英語行に [Ja] が付く誤り。日本語先・英語に [Ja]。
-			lines:     group("// POST /posts は後続タスクで登録する。", "// [Ja] POST /posts is registered in a later task."),
+			name: "Japanese block is not Japanese (1)",
+			// The lines under the Japanese marker carry English text.
+			//
+			// [Ja] 日本語マーカーの下の行が英文になっている。
+			lines:     group("// Hash the password.", "//", "// [Ja] hash the password"),
 			wantConds: []int{1},
 		},
 		{
-			name: "Japanese-only with stray marker, no English above (002)",
-			// No English block; [Ja] is misused as a separator (same shape as 002).
-			// [Ja] 英語ブロックが無く [Ja] を区切りに誤用 (002 と同型)。
-			lines:     group("// CSRF トークンを設定する。", "// [Ja] /new は RequireAuth 配下のため context 経由で渡る。"),
+			name: "English block contains Japanese, a duplicated Japanese block (2)",
+			// The unmarked English block is written in Japanese (the duplication misuse).
+			//
+			// [Ja] 無マーカーの英語ブロックが日本語で書かれている (重複の誤用)。
+			lines:     group("// 平文パスワードをハッシュ化する。", "//", "// [Ja] 平文パスワードをハッシュ化する。"),
 			wantConds: []int{2},
 		},
 		{
-			name:      "marker-only Japanese comment without any English block",
+			name: "Japanese on the line nearest the marker (2)",
+			// The line just above the marker is Japanese (the canonical misuse).
+			//
+			// [Ja] マーカーの直上の行が日本語になっている (典型的な誤用)。
+			lines:     group("// First line.", "// 二行目に日本語。", "//", "// [Ja] 最初の行。", "// 2 行目。"),
+			wantConds: []int{2},
+		},
+		{
+			name: "Japanese label line merged above an English block is not flagged",
+			// A missing blank line merges a Japanese label into the group, but only
+			// the line nearest the marker is the English side, so it is not flagged.
+			//
+			// [Ja] 空行漏れで日本語ラベルが群に取り込まれても、マーカーに最も近い行だけが
+			// 英語側なので誤検出しない。
+			lines:     group("// 設定する", "// Configure the client.", "//", "// [Ja] クライアントを設定する。"),
+			wantConds: nil,
+		},
+		{
+			name: "obsolete English marker (7)",
+			// A leading [En] marker is obsolete; the English block is unmarked now.
+			//
+			// [Ja] 行頭の [En] マーカーは廃止。英語ブロックは無マーカーにする。
+			lines:     group("// [En] Hash the password.", "//", "// [Ja] パスワードをハッシュ化する。"),
+			wantConds: []int{7},
+		},
+		{
+			name: "obsolete English marker with Japanese in the English block (2 then 7)",
+			// Both the obsolete marker and the Japanese-in-English misuse are reported.
+			//
+			// [Ja] 廃止マーカーと、英語ブロックの日本語混入の両方を報告する。
+			lines:     group("// [En] 平文パスワードをハッシュ化する。", "//", "// [Ja] 平文パスワードをハッシュ化する。"),
+			wantConds: []int{2, 7},
+		},
+		{
+			name: "two obsolete English markers (7 then 7)",
+			// Each [En] marker line is reported.
+			//
+			// [Ja] [En] マーカー行はそれぞれ報告される。
+			lines:     group("// [En] English one.", "// [En] English two.", "//", "// [Ja] 日本語。"),
+			wantConds: []int{7, 7},
+		},
+		{
+			name:      "Japanese-only comment with no English block (4)",
 			lines:     group("// [Ja] 日本語のみのコメント。"),
-			wantConds: []int{2},
-		},
-		{
-			name: "Japanese line with a Latin acronym is still Japanese (not an English block)",
-			// A Japanese line stays Japanese even when it contains the Latin acronym CSRF.
-			// [Ja] ラテン略語 CSRF を含んでも日本語行は英語ブロックにならない。
-			lines:     group("// CSRF を検証する。", "// [Ja] これは説明である。"),
-			wantConds: []int{2},
-		},
-		{
-			name:      "more than one marker in a group",
-			lines:     group("// English line.", "// [Ja] 日本語。", "// [Ja] 二つ目のマーカー。"),
-			wantConds: []int{3},
-		},
-		{
-			name: "marker on English line that is also a duplicate",
-			// The second marker sits on an English line, so both condition 3 and condition 1 fire.
-			// [Ja] 2 つ目のマーカーが英語行 → 条件 3 と条件 1 の両方。
-			lines:     group("// English.", "// [Ja] 日本語。", "// [Ja] second english marker."),
-			wantConds: []int{3, 1},
-		},
-		{
-			name: "missing blank line after a multi-line English block (4a)",
-			// Two English lines run straight into the marker (the §2.1.2 violation).
-			// [Ja] 英文 2 行が空行なしでマーカーに連続している (§2.1.2 違反)。
-			lines:     group("// Render the page title.", "// The site default is appended.", "// [Ja] ページタイトルをレンダリングする。"),
 			wantConds: []int{4},
 		},
 		{
-			name: "unnecessary blank line after a one-line English comment (4b)",
-			// A blank line follows a one-line English comment (the §2.1.5 bad example).
-			// [Ja] 英文 1 行なのに空行を挟んでいる (§2.1.5 の悪い例)。
-			lines:     group("// Hash the password.", "//", "// [Ja] パスワードをハッシュ化する。"),
+			name: "Japanese marker first, English text after it (4)",
+			// English after the Japanese marker does not count as an English block above it.
+			//
+			// [Ja] 日本語マーカーの後ろの英語は、上の英語ブロックとはみなさない。
+			lines:     group("// [Ja] 日本語。", "// English."),
 			wantConds: []int{4},
 		},
 		{
-			name: "code example above the marker skips condition 4",
-			// The tab-indented code line is unclassifiable, so the missing blank line is not reported.
-			// [Ja] タブ字下げのコード行は分類できないため、空行欠落を報告しない。
-			lines:     group("//\tkoryluslint comment .", "//", "// Run the tool first.", "// Then check the output.", "// [Ja] 先にツールを実行し、出力を確認する。"),
-			wantConds: nil,
-		},
-		{
-			name: "space-indented code example above the marker skips condition 4",
-			// The space-indented code line is unclassifiable, so the missing blank line is not reported.
-			// [Ja] スペース字下げのコード行は分類できないため、空行欠落を報告しない。
-			lines:     group("// Run the tool:", "//   koryluslint comment .", "// [Ja] ツールを実行する。"),
-			wantConds: nil,
-		},
-		{
-			name: "separator line above the marker skips condition 4",
-			// The dash separator is unclassifiable, so the missing blank line is not reported.
-			// [Ja] ダッシュの区切り線は分類できないため、空行欠落を報告しない。
-			lines:     group("// ----", "// Run the tool first.", "// Then check the output.", "// [Ja] 先にツールを実行し、出力を確認する。"),
-			wantConds: nil,
-		},
-		{
-			name: "star-row separator above the marker skips condition 4",
-			// A row of stars is unclassifiable (not a blank line), so condition 4 stays silent.
-			// [Ja] 星のみの区切り線は空行ではなく分類できない行のため、条件 4 を報告しない。
-			lines:     group("// Hash the password.", "//****", "// [Ja] パスワードをハッシュ化する。"),
-			wantConds: nil,
-		},
-		{
-			name: "second marker in a duplicate-marker group does not add condition 4",
-			// The duplicate marker is already condition 3; the blank-line check stays silent for it.
-			// [Ja] 重複マーカーは条件 3 で報告済みのため、空行検査は発火しない。
-			lines:     group("// First pair.", "// [Ja] 最初のペア。", "// Second pair English.", "// [Ja] 二つ目のペア。"),
+			name: "inline marker with a duplicated Japanese block (3)",
+			// A duplicated Japanese block on one line, with the marker at end of line.
+			//
+			// [Ja] 1 行に日本語ブロックが重複し、マーカーが行末にある。
+			lines:     group("// 値はゼロのまま。[Ja] 値はゼロのまま。"),
 			wantConds: []int{3},
 		},
 		{
-			name: "URL-only line above the marker skips condition 4",
-			// A URL-only line is not prose, so condition 4 stays silent for the group.
-			// [Ja] URL のみの行は地の文ではないため、この群では条件 4 を報告しない。
-			lines:     group("// See the upstream issue.", "// https://github.com/golang/go/issues/12345", "// [Ja] 上流の issue を参照。"),
-			wantConds: nil,
+			name: "inline marker with a reversed Japanese-then-English pair (3)",
+			// Japanese leads and English follows the end-of-line marker.
+			//
+			// [Ja] 日本語が先で、行末マーカーの後ろに英語が続く。
+			lines:     group("// ドキュメント宣言。[Ja] document declaration"),
+			wantConds: []int{3},
+		},
+		{
+			name: "inline marker with English before it is still banned (5)",
+			// A valid-looking old inline pair is banned under the current format.
+			//
+			// [Ja] 一見正しい旧インラインペアも現行フォーマットでは禁止。
+			lines:     group("// Hash the password. [Ja] パスワードをハッシュ化する。"),
+			wantConds: []int{5},
+		},
+		{
+			name: "duplicate Japanese marker (6)",
+			// Two Japanese markers in one comment.
+			//
+			// [Ja] 1 コメントに日本語マーカーが 2 つ。
+			lines:     group("// English.", "//", "// [Ja] 日本語。", "// [Ja] 二つ目の日本語。"),
+			wantConds: []int{6},
 		},
 	}
 
@@ -187,62 +199,112 @@ func TestCheckGroupReportsLineNumber(t *testing.T) {
 	t.Parallel()
 
 	lines := []commentLine{
-		{line: 766, text: "// POST /posts は後続タスクで登録する。"},
-		{line: 767, text: "// [Ja] POST /posts is registered in a later task."},
+		{line: 766, text: "// 値はゼロのまま。[Ja] 値はゼロのまま。"},
 	}
 	fs := checkGroup(lines)
 	if len(fs) != 1 {
 		t.Fatalf("got %d findings, want 1", len(fs))
 	}
-	if fs[0].line != 767 {
-		t.Errorf("finding line = %d, want 767", fs[0].line)
+	if fs[0].line != 766 {
+		t.Errorf("finding line = %d, want 766", fs[0].line)
 	}
 }
 
-func TestIsEnglishText(t *testing.T) {
+func TestMarkerKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		text string
+		want string
+	}{
+		{"// [En] foo", "en"},
+		{"// [Ja] バー", "ja"},
+		{"//   [En] indented leader is trimmed", "en"},
+		{"\t* [En] block-comment continuation", "en"},
+		{"// foo", ""},
+		{"// The [En] mention is not at the start", ""},
+		{"// 値はゼロのまま。[Ja] 値はゼロのまま。", ""},
+	}
+	for _, tt := range tests {
+		if got := markerKind(tt.text); got != tt.want {
+			t.Errorf("markerKind(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestInlineMarkerMisuse(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		text string
 		want bool
 	}{
-		{"Set the CSRF token on the context.", true},
-		{"CSRF トークンを設定する。", false}, // Latin acronym in Japanese is not English.
-		{"// ", false}, // marker leader only (the "before" slice for "// [Ja] ...").
-		{"日本語のみ。", false},
-		{"", false},
+		// Misuse: a duplicated Japanese block on one line.
+		//
+		// [Ja] 誤用: 1 行に日本語ブロックが重複。
+		{"// 値はゼロのまま。[Ja] 値はゼロのまま。", true},
+		{"// CancelAt はゼロ値 (0) のまま. [Ja] CancelAt はゼロ値 (0) のまま", true},
+		// Misuse: reversed pair, Japanese leads and English follows the marker.
+		//
+		// [Ja] 誤用: 逆順ペア。日本語が先でマーカーの後ろに英語。
+		{"// ドキュメント宣言。[Ja] document declaration", true},
+		// English before the marker: no Japanese in the block before it.
+		//
+		// [Ja] マーカーの前が英語: 前のブロックに日本語が無い。
+		{"// Hash the password. [Ja] パスワードをハッシュ化する。", false},
+		{`// "ja" or "en". [Ja] "ja" または "en"`, false},
+		// Prose mention: the marker follows a particle, not a sentence end.
+		//
+		// [Ja] 地の文の言及: マーカーが助詞の後で文末ではない。
+		{"// 本文が [Ja] マーカーで始まる行だけを対象にする。", false},
+		// A line-leading marker is handled elsewhere, not here.
+		//
+		// [Ja] 行頭マーカーは別で扱うためここでは対象外。
+		{"// [Ja] 日本語のみ。", false},
+		{"// [En] English only.", false},
+		// No marker at all.
+		//
+		// [Ja] マーカーが無い。
+		{"// 値はゼロのまま。", false},
 	}
 	for _, tt := range tests {
-		if got := isEnglishText(tt.text); got != tt.want {
-			t.Errorf("isEnglishText(%q) = %v, want %v", tt.text, got, tt.want)
+		if got := inlineMarkerMisuse(tt.text); got != tt.want {
+			t.Errorf("inlineMarkerMisuse(%q) = %v, want %v", tt.text, got, tt.want)
 		}
 	}
 }
 
-func TestClassifyLine(t *testing.T) {
+func TestInlineMarkerPresent(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		text string
-		want lineKind
+		want bool
 	}{
-		{"// Set the CSRF token on the context.", kindEnglish},
-		{"// CSRF トークンを設定する。", kindJapanese},
-		{"//", kindBlank},
-		{"// ", kindBlank},
-		{"/**", kindBlank}, // block-comment opener has no content. [Ja] ブロックコメントの開始行は本文なし
-		{"\t* Renders the page title.", kindEnglish},
-		{"//\tkoryluslint comment .", kindOther},  // godoc-style code block. [Ja] godoc 形式のコード例
-		{"//   koryluslint comment .", kindOther}, // space-indented code example. [Ja] スペース字下げのコード例
-		{"// https://example.com/issues/1", kindOther},
-		{"// ----", kindOther},
-		{"//****", kindOther},                                    // a star row keeps its content, unlike "/**". [Ja] 星の並びは "/**" と違い本文が残る
-		{"*****", kindOther},                                     // a bare star row inside a block comment. [Ja] ブロックコメント内の星のみの区切り線
-		{"// See https://example.com for details.", kindEnglish}, // a URL inside prose stays English. [Ja] 地の文中の URL は英文のまま
+		// An inline Japanese marker after a sentence end.
+		//
+		// [Ja] 文末の後にインライン日本語マーカー。
+		{"// Hash the password. [Ja] パスワードをハッシュ化する。", true},
+		{"// 値はゼロのまま。[Ja] 値はゼロのまま。", true},
+		// An inline English marker after a sentence end.
+		//
+		// [Ja] 文末の後にインライン英語マーカー。
+		{"// cache it. [En] cache the result", true},
+		// Prose mention: no sentence end before the marker.
+		//
+		// [Ja] 地の文の言及: マーカーの前に文末が無い。
+		{"// The [Ja] marker leads the Japanese block.", false},
+		{"// 本文が [Ja] マーカーで始まる。", false},
+		// Line-leading markers and lines without any marker.
+		//
+		// [Ja] 行頭マーカー、およびマーカーの無い行。
+		{"// proper English block line", false},
+		{"// [Ja] 行頭の日本語マーカー", false},
+		{"// no markers here at all", false},
 	}
 	for _, tt := range tests {
-		if got := classifyLine(tt.text); got != tt.want {
-			t.Errorf("classifyLine(%q) = %v, want %v", tt.text, got, tt.want)
+		if got := inlineMarkerPresent(tt.text); got != tt.want {
+			t.Errorf("inlineMarkerPresent(%q) = %v, want %v", tt.text, got, tt.want)
 		}
 	}
 }
@@ -259,6 +321,7 @@ func TestGoCommentGroupsIgnoresStringLiterals(t *testing.T) {
 		"package sample",
 		"",
 		"// Greet returns a greeting.",
+		"//",
 		"// [Ja] Greet は挨拶を返す。",
 		"func Greet() string {",
 		"\treturn \"// [Ja] this is not a comment\"",
@@ -279,7 +342,7 @@ func TestGoCommentGroupsIgnoresStringLiterals(t *testing.T) {
 		}
 	}
 	if markerLines != 1 {
-		t.Errorf("found %d comment lines with [Ja], want 1 (string literal must be ignored)", markerLines)
+		t.Errorf("found %d comment lines with the marker, want 1 (string literal must be ignored)", markerLines)
 	}
 }
 
@@ -293,10 +356,12 @@ func TestTemplCommentGroups(t *testing.T) {
 	// 末尾のマークアップはどの群にも含まれない。
 	src := []byte(strings.Join([]string{
 		"// First group.",
+		"//",
 		"// [Ja] 最初の群。",
 		"templ Page() {",
 		"\t<div>hello</div>",
 		"// Second group.",
+		"//",
 		"// [Ja] 2 つ目の群。",
 		"}",
 	}, "\n"))
@@ -308,8 +373,8 @@ func TestTemplCommentGroups(t *testing.T) {
 	if groups[0][0].line != 1 {
 		t.Errorf("first group starts at line %d, want 1", groups[0][0].line)
 	}
-	if groups[1][0].line != 5 {
-		t.Errorf("second group starts at line %d, want 5", groups[1][0].line)
+	if groups[1][0].line != 6 {
+		t.Errorf("second group starts at line %d, want 6", groups[1][0].line)
 	}
 }
 
@@ -339,23 +404,23 @@ func TestIsGenerated(t *testing.T) {
 	}
 }
 
-// TestRunFullMode exercises the subcommand end to end over a temp tree: full
-// mode reports only condition 1, writes findings to stdout and a summary to
-// stderr, and exits 1.
+// TestRunFullMode exercises the subcommand end to end over a temp tree: full mode
+// reports a near-zero-false-positive condition (here a Japanese block that is not
+// Japanese), writes findings to stdout and a summary to stderr, and exits 1.
 //
-// [Ja] TestRunFullMode は一時ツリー上でサブコマンドを通しで動かす。全体モードは
-// 条件 1 のみを報告し、検出を stdout・要約を stderr に書き、終了コード 1 を返す。
+// [Ja] TestRunFullMode は一時ツリー上でサブコマンドを通しで動かす。全体モードは誤検出が
+// ほぼ無い条件 (ここでは日本語でない日本語ブロック) を報告し、検出を stdout・要約を
+// stderr に書き、終了コード 1 を返す。
 func TestRunFullMode(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// Condition 1: a Japanese line leads and the marker sits on an English line.
-	// [Ja] 条件 1: 日本語行が先導し、マーカーが英語行に付いている。
 	writeFile(t, dir, "bad.go", strings.Join([]string{
 		"package sample",
 		"",
-		"// 日本語が先の行。",
-		"// [Ja] English text on the marker line.",
+		"// valid english block.",
+		"//",
+		"// [Ja] this block is not japanese.",
 		"func Bad() {}",
 	}, "\n"))
 
@@ -365,22 +430,106 @@ func TestRunFullMode(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "bad.go:4:") {
-		t.Errorf("stdout = %q, want a finding at bad.go:4", stdout.String())
+	if !strings.Contains(stdout.String(), "bad.go:5:") {
+		t.Errorf("stdout = %q, want a finding at bad.go:5", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "1 bilingual [Ja] marker violation") {
+	if !strings.Contains(stderr.String(), "1 bilingual marker violation") {
 		t.Errorf("stderr = %q, want a violation summary", stderr.String())
 	}
 }
 
-// TestRunNoViolations confirms a clean tree exits 0 with no output. Conditions
-// 2 (no English block above) and 4 (blank line before the marker) are not
-// reported in full mode, so neither a Japanese-only comment nor a missing
-// blank line must trip the check.
+// TestRunFullModeEnglishBlockJapanese confirms full mode reports an English block
+// that contains Japanese (the duplication misuse), tree-wide.
 //
-// [Ja] TestRunNoViolations は問題のないツリーが無出力・終了コード 0 になることを
-// 確認する。全体モードでは条件 2 (英語ブロック無し) と条件 4 (マーカー前の空行) を
-// 報告しないため、日本語のみのコメントや空行欠落で検査が落ちてはならない。
+// [Ja] TestRunFullModeEnglishBlockJapanese は、英語ブロックに日本語が入っている誤用
+// (重複) を全体モードがツリー全体で報告することを確認する。
+func TestRunFullModeEnglishBlockJapanese(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", strings.Join([]string{
+		"package sample",
+		"",
+		"// 平文パスワードをハッシュ化する。",
+		"//",
+		"// [Ja] 平文パスワードをハッシュ化する。",
+		"func Bad() {}",
+	}, "\n"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{dir}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "bad.go:3:") {
+		t.Errorf("stdout = %q, want a finding at bad.go:3", stdout.String())
+	}
+}
+
+// TestRunFullModeObsoleteEnglishMarker confirms full mode reports an obsolete
+// English marker, tree-wide.
+//
+// [Ja] TestRunFullModeObsoleteEnglishMarker は、廃止された英語マーカーを全体モードが
+// ツリー全体で報告することを確認する。
+func TestRunFullModeObsoleteEnglishMarker(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", strings.Join([]string{
+		"package sample",
+		"",
+		"// [En] Greet returns a greeting.",
+		"//",
+		"// [Ja] Greet は挨拶を返す。",
+		"func Greet() string { return \"hi\" }",
+	}, "\n"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{dir}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "bad.go:3:") {
+		t.Errorf("stdout = %q, want a finding at bad.go:3", stdout.String())
+	}
+}
+
+// TestRunFullModeInlineMarker confirms full mode reports an inline Japanese
+// marker with Japanese before it, tree-wide.
+//
+// [Ja] TestRunFullModeInlineMarker は、前に日本語があるインライン日本語マーカーを全体
+// モードがツリー全体で報告することを確認する。
+func TestRunFullModeInlineMarker(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", strings.Join([]string{
+		"package sample",
+		"",
+		"// 値はゼロのまま。[Ja] 値はゼロのまま。",
+		"func Bad() {}",
+	}, "\n"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{dir}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "bad.go:3:") {
+		t.Errorf("stdout = %q, want a finding at bad.go:3", stdout.String())
+	}
+}
+
+// TestRunNoViolations confirms a clean tree exits 0 with no output. The
+// English-required, inline-ban, duplicate, and blank-separator rules are diff-mode
+// only, so none of them must trip in full mode.
+//
+// [Ja] TestRunNoViolations は問題のないツリーが無出力・終了コード 0 になることを確認する。
+// 英語必須・インライン禁止・重複・ブロック間空行の規則は差分モード限定のため、全体モードでは
+// 発火してはならない。
 func TestRunNoViolations(t *testing.T) {
 	t.Parallel()
 
@@ -389,15 +538,15 @@ func TestRunNoViolations(t *testing.T) {
 		"package sample",
 		"",
 		"// Greet returns a greeting.",
+		"//",
 		"// [Ja] Greet は挨拶を返す。",
 		"func Greet() string { return \"hi\" }",
 		"",
-		"// [Ja] 日本語のみのコメント。",
-		"func JapaneseOnly() {}",
-		"",
 		"// Wave waves at the user.",
 		"// It never returns an error.",
-		"// [Ja] Wave はユーザーに手を振る (空行欠落だが全体モードでは報告されない)。",
+		"//",
+		"// [Ja] Wave はユーザーに手を振る。",
+		"// エラーは返さない。",
 		"func Wave() {}",
 	}, "\n"))
 
@@ -415,8 +564,8 @@ func TestRunNoViolations(t *testing.T) {
 // TestRunSkipsGeneratedFiles confirms generated files are not checked even when
 // they contain a marker misuse.
 //
-// [Ja] TestRunSkipsGeneratedFiles は、生成物がマーカー誤用を含んでいても検査
-// 対象外になることを確認する。
+// [Ja] TestRunSkipsGeneratedFiles は、生成物がマーカー誤用を含んでいても検査対象外に
+// なることを確認する。
 func TestRunSkipsGeneratedFiles(t *testing.T) {
 	t.Parallel()
 
@@ -425,8 +574,9 @@ func TestRunSkipsGeneratedFiles(t *testing.T) {
 		"// Code generated by stringer. DO NOT EDIT.",
 		"package sample",
 		"",
-		"// 日本語が先の行。",
-		"// [Ja] English text on the marker line.",
+		"// 日本語が英語ブロックに入っている。",
+		"//",
+		"// [Ja] 日本語。",
 		"func Gen() {}",
 	}, "\n"))
 
@@ -439,6 +589,7 @@ func TestRunSkipsGeneratedFiles(t *testing.T) {
 }
 
 // TestRunHelpExitsZero confirms a -h request is treated as success.
+//
 // [Ja] TestRunHelpExitsZero は -h 要求が成功扱いになることを確認する。
 func TestRunHelpExitsZero(t *testing.T) {
 	t.Parallel()
@@ -450,6 +601,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 }
 
 // writeFile writes content to name under dir, failing the test on error.
+//
 // [Ja] writeFile は dir 配下の name に content を書き出し、失敗時にテストを止める。
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
