@@ -1,7 +1,5 @@
-# golangci-lint v2 configuration (minimal initial setup).
+# golangci-lint v2の設定ファイル (初期は最小構成)
 # https://golangci-lint.run/usage/configuration/
-#
-# [Ja] golangci-lint v2 の設定ファイル (初期は最小構成)。
 version: "2"
 
 run:
@@ -10,19 +8,16 @@ run:
 
 linters:
   enable:
-    - govet # Go standard static analysis. [Ja] Go 標準の静的解析
-    - staticcheck # advanced static analysis. [Ja] 高度な静的解析
-    - errcheck # report unchecked errors. [Ja] 未チェックのエラーを検出
-    - ineffassign # detect ineffectual assignments. [Ja] 無効な代入を検出
-    - unused # detect unused code. [Ja] 未使用コードを検出
-    - gosec # security checks. [Ja] セキュリティチェック
+    - govet # Go標準の静的解析
+    - staticcheck # 高度な静的解析
+    - errcheck # 未チェックのエラーを検出
+    - ineffassign # 無効な代入を検出
+    - unused # 未使用コードを検出
+    - gosec # セキュリティチェック
   settings:
     errcheck:
-      # Writes to stdout/stderr via the fmt print family are not actionable on
-      # failure (e.g. a broken pipe), so do not require checking their errors.
-      #
-      # [Ja] fmt の print 系による stdout/stderr への書き込みは、失敗しても回復でき
-      # ない (broken pipe など) ため、エラーチェックを必須にしない。
+      # fmtのprint系によるstdout/stderrへの書き込みは、失敗しても回復できない
+      # (broken pipeなど) ため、エラーチェックを必須にしない。
       exclude-functions:
         - fmt.Print
         - fmt.Printf
@@ -33,11 +28,10 @@ linters:
 
 formatters:
   enable:
-    - gofmt # standard Go formatting. [Ja] Go 標準フォーマット
-    - goimports # organize imports. [Ja] import 文の整理
+    - gofmt # Go標準フォーマット
+    - goimports # import文の整理
   settings:
     goimports:
-      # Group imports of this module separately from third-party packages.
-      # [Ja] 本モジュールの import をサードパーティと分けてグループ化します。
+      # 本モジュールのimportをサードパーティと分けてグループ化する。
       local-prefixes:
-        - github.com/korylus/korylus-tools
+        - github.com/korylus/tools

@@ -1,32 +1,24 @@
-// Package md implements the md subcommand of koryluslint, which checks (and can
-// fix) semantic line breaks in Markdown documents: body prose is written one
-// sentence per line, breaking at each sentence-final "。", per
-// korylus-writing-doc.md.
+// Package mdはkoryluslintのmdサブコマンドを実装し、Markdownドキュメントを
+// 2つの観点で検査する。
 //
-// Modes:
+//   - 句点改行 (semantic line break): 地の文を「1文1行」にし、文末の「。」で
+//     改行する (korylus-writing-doc.md)
+//   - 日本語テキストのスタイル: 全角丸括弧と、半角英数字と日本語の間のスペースを
+//     禁じる (korylus-lang.md §3。ルール本体はinternal/styleが持つ)
 //
-//	md [-base=<ref>] [paths...]   report prose lines that pack multiple sentences.
-//	md --write [...]              rewrite those lines in place instead of reporting.
-//	md --all [...]                target every .md file (full files).
+// 句点改行は地の文だけを対象にするが、§3のスタイルは見出し・箇条書き・表・引用
+// にも適用する。
 //
-// Scope: with explicit paths the given files are checked in full; with --all
-// every .md under the tree is checked in full; otherwise only lines changed vs
-// HEAD (or vs <ref> with -base) are checked, so untouched legacy documents are
-// never flagged.
+// モードは3つ。
 //
-// [Ja] md パッケージは koryluslint の md サブコマンドを実装し、Markdown ドキュメントの
-// 句点改行 (semantic line break) を検査・修正する。地の文を「1 文 1 行」にし、文末の
-// 「。」で改行する。ルールは korylus-writing-doc.md を参照。
+//	md [-base=<ref>] [paths...]   検査して違反を報告する。
+//	md --write [...]              句点改行をその場で修正し、残る違反を報告する。
+//	md --all [...]                全 .mdファイル (全行) を対象にする。
 //
-// モード:
-//
-//	md [-base=<ref>] [paths...]   複数文が 1 行に詰まった地の文を報告する。
-//	md --write [...]              報告ではなく該当行をその場で書き換える。
-//	md --all [...]                全 .md ファイル (全行) を対象にする。
-//
-// スコープ: 明示パスを渡すとそのファイルを全行検査し、--all なら全 .md を全行検査する。
-// それ以外は HEAD (または -base の <ref>) との差分行のみを検査するため、触っていない
-// 既存ドキュメントは指摘されない。
+// スコープ: 明示パスを渡すとそのファイルを全行検査し、--allなら全 .mdを全行
+// 検査する。
+// それ以外はHEAD (または -baseの <ref>) との差分行のみを検査するため、触って
+// いない既存ドキュメントは指摘されない。
 package md
 
 import (
@@ -47,55 +39,56 @@ import (
 	"unicode"
 
 	"github.com/korylus/tools/internal/cli"
+	"github.com/korylus/tools/internal/style"
 )
 
 const (
-	writeUsage = "rewrite files in place instead of reporting / 報告ではなくファイルをその場で書き換える"
-	allUsage   = "check every .md file in full, not just changed lines / 差分行だけでなく全 .md を全行検査する"
+	writeUsage = "句点改行をその場で修正し、残るスタイル違反を報告する"
+	allUsage   = "差分行だけでなく全 .mdを全行検査する"
 )
 
-// msgViolation is the report line for a prose line that packs multiple
-// sentences. Program output is English only (see the implementation decision
-// log), unlike the comment block above the offending line.
-//
-// [Ja] msgViolation は複数文を 1 行に詰めた地の文の報告メッセージ。プログラム出力は
-// 英語のみとする (実装判断ログ参照)。
-const msgViolation = `multiple sentences on one line; break at each "。" (semantic line break)`
+// msgSentenceは複数の文を1行に詰めた地の文の報告メッセージ。
+const msgSentence = "1行に複数の文が詰まっている (文末の「。」で改行する)"
 
 var (
-	// reFence matches a code-fence delimiter line (``` optionally indented).
-	// [Ja] reFence はコードフェンス区切り行 (``` 。インデント可) にマッチする。
-	reFence = regexp.MustCompile("^\\s*```")
-	// reHeading matches an ATX heading line.
-	// [Ja] reHeading は ATX 見出し行にマッチする。
+	// reHeadingはATX見出しの行にマッチする。
 	reHeading = regexp.MustCompile(`^\s*#`)
-	// reList matches a bullet or ordered list item.
-	// [Ja] reList は箇条書き・番号付きリストの項目にマッチする。
+	// reListは箇条書き・番号付きリストの項目にマッチする。
 	reList = regexp.MustCompile(`^\s*([-*+]|\d+[.)])\s`)
-	// reTable matches a table row.
-	// [Ja] reTable は表の行にマッチする。
+	// reTableは表の行にマッチする。
 	reTable = regexp.MustCompile(`^\s*\|`)
-	// reBlockquote matches a blockquote line.
-	// [Ja] reBlockquote は引用行にマッチする。
+	// reBlockquoteは引用の行にマッチする。
 	reBlockquote = regexp.MustCompile(`^\s*>`)
-	// reHunk matches a unified-diff hunk header, capturing the new-side start
-	// line and (optional) line count.
-	//
-	// [Ja] reHunk は unified diff のハンクヘッダーにマッチし、新側の開始行と
+	// reHunkはunified diffのハンクヘッダーにマッチし、新側の開始行と
 	// (任意の) 行数を取り出す。
 	reHunk = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 )
 
-// proseHit is one prose line that violates the one-sentence-per-line rule.
-// [Ja] proseHit は「1 文 1 行」規則に違反した地の文の行 1 件。
-type proseHit struct {
+// docLineは走査した1行のうち、検査に使う部分。
+type docLine struct {
+	// lineNoは1始まりの行番号。
 	lineNo int
-	line   string
+	// textは行そのもの。報告と句点改行の検査に使う。
+	text string
+	// proseはtextが地の文かどうか。句点改行は地の文だけを対象にする。
+	// styleに空白しか残らない行は、コメントやコードの内側なので地の文に数えない。
+	prose bool
+	// styleは §3スタイルと句点改行の区切り位置を判定するテキスト。
+	// ASTで特定したコード本文とHTMLコメントを半角スペースに置き換える。
+	// textとルーン数が揃うため、位置をtextへそのまま対応づけられる。
+	style string
 }
 
-// Run is the entry point of the md subcommand. args is what remains after the
-// subcommand name, and the return value is the process exit code.
-// [Ja] Run は md サブコマンドのエントリポイント。args はサブコマンド名を除いた
+// hitは検出した違反1件。
+type hit struct {
+	lineNo int
+	line   string
+	msg    string
+	// fixableは --writeで直せる違反かどうか。句点改行だけが該当する。
+	fixable bool
+}
+
+// Runはmdサブコマンドのエントリポイント。argsはサブコマンド名を除いた
 // 残りの引数で、戻り値はプロセスの終了コード。
 func Run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("md", flag.ContinueOnError)
@@ -105,8 +98,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&write, "write", false, writeUsage)
 	fs.BoolVar(&all, "all", false, allUsage)
 	if err := fs.Parse(args); err != nil {
-		// A -h/--help request is a success, not a usage error.
-		// [Ja] -h/--help の要求はエラーではなく成功扱いにする。
+		// -h/--helpの要求はエラーではなく成功扱いにする。
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
@@ -120,56 +112,48 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return runCheck(paths, all, opts.Base, stdout, stderr)
 }
 
-// runCheck reports violations within scope and returns 1 when any are found.
-//
-// With explicit paths, a read failure is treated as a user error (e.g. a
-// mistyped path) and makes the command exit non-zero, mirroring runWrite, so a
-// bad path is never mistaken for "clean". For --all and diff scope the file set
-// comes from the filesystem / git, so a read failure is a benign race and is
-// swallowed (faithful to the Node original's check mode).
-//
-// [Ja] runCheck はスコープ内の違反を報告し、1 件でもあれば 1 を返す。
+// runCheckはスコープ内の違反を報告し、1件でもあれば1を返す。
 //
 // 明示パス指定時は、読み取り失敗を (パスのタイプミスなどの) ユーザーエラーと
-// みなして非ゼロ終了させ (runWrite に揃える)、不正なパスを「指摘なし」と
-// 取り違えないようにする。--all・差分スコープではファイル集合がファイル
-// システム / git 由来のため、読み取り失敗は無害な競合として握りつぶす
-// (Node 版 check モードに忠実)。
+// みなして非ゼロ終了させ (runWriteに揃える)、不正なパスを「指摘なし」と
+// 取り違えないようにする。
+// --all・差分スコープではファイル集合がファイルシステム / git由来のため、
+// 読み取り失敗は無害な競合として握りつぶす (Node版checkモードに忠実)。
 func runCheck(paths []string, all bool, base string, stdout, stderr io.Writer) int {
 	scope := resolveScope(paths, all, base)
 	explicit := len(paths) > 0
-
-	files := make([]string, 0, len(scope))
-	for f := range scope {
-		files = append(files, f)
-	}
-	sort.Strings(files)
+	files := sortedTargets(scope)
 
 	total := 0
+	fixable := 0
 	failed := false
 	for _, f := range files {
 		lineSet := scope[f]
 		src, err := os.ReadFile(f) //#nosec G304
 		if err != nil {
 			if explicit {
-				fmt.Fprintf(stderr, "error: %s: %v\n", f, err)
+				fmt.Fprintf(stderr, "エラー: %s: %v\n", f, err)
 				failed = true
 			}
 			continue
 		}
 		for _, h := range violations(string(src)) {
-			// A nil line set means the whole file is in scope.
-			// [Ja] 行集合が nil ならファイル全体がスコープ内。
+			// 行集合がnilならファイル全体がスコープ内。
 			if lineSet != nil && !lineSet[h.lineNo] {
 				continue
 			}
 			total++
-			fmt.Fprintf(stdout, "%s:%d: %s\n", f, h.lineNo, msgViolation)
-			fmt.Fprintf(stdout, "    %s\n", truncate(strings.TrimSpace(h.line), 100))
+			if h.fixable {
+				fixable++
+			}
+			reportHit(stdout, f, h)
 		}
 	}
 	if total > 0 {
-		fmt.Fprintf(stderr, "\nkoryluslint md: %d semantic-line-break violation(s); run `koryluslint md --write` to fix\n", total)
+		fmt.Fprintf(stderr, "\nkoryluslint md: 違反%d件\n", total)
+		if fixable > 0 {
+			fmt.Fprintf(stderr, "うち句点改行%d件は `koryluslint md --write` で修正できる\n", fixable)
+		}
 		return 1
 	}
 	if failed {
@@ -178,77 +162,103 @@ func runCheck(paths []string, all bool, base string, stdout, stderr io.Writer) i
 	return 0
 }
 
-// runWrite rewrites the in-scope files in place and reports what changed.
-// In --write mode the scope is file-granular (changed lines are not used to
-// limit which lines are rewritten; only sentence-final "。" at top level break).
-// A read or write failure on any file is reported to stderr and makes the
-// command exit non-zero, so a broken --write run is never mistaken for success.
-//
-// [Ja] runWrite はスコープ内のファイルをその場で書き換え、変更点を報告する。
-// --write モードではスコープはファイル単位で、どの行を書き換えるかを差分行で
-// 絞り込まない (トップレベルの文末「。」だけが改行される)。
-// いずれかのファイルで読み取り・書き込みに失敗した場合は stderr に報告して
-// 終了コードを非ゼロにし、壊れた --write 実行を成功と取り違えないようにする。
+// runWriteはスコープ内のファイルをその場で書き換え、変更点を報告する。
+// 書き換えるのは句点改行だけで、§3スタイルの違反は機械的に直せないため報告に
+// 留め、違反が残る場合は終了コード1を返す。
+// --writeモードでも、どの行を書き換えるかは差分行で絞り込まない (ファイル単位
+// でトップレベルの文末「。」だけが改行される) が、残存違反の報告はrunCheckと
+// 同じ差分スコープに合わせる。
+// 書き換えで行番号がずれるため、rewriteWithOriginsの対応表で元の行番号に戻して
+// から行集合と突き合わせる。
+// いずれかのファイルで読み取り・書き込みに失敗した場合はstderrに報告して
+// 終了コードを非ゼロにし、壊れた --write実行を成功と取り違えないようにする。
 func runWrite(paths []string, all bool, base string, stdout, stderr io.Writer) int {
-	var targets []string
-	switch {
-	case len(paths) > 0:
-		targets = paths
-	case all:
-		targets = listAllMarkdown(".")
-	default:
-		for f := range changedLines(base) {
-			targets = append(targets, f)
-		}
-	}
-	sort.Strings(targets)
+	scope := resolveScope(paths, all, base)
+	targets := sortedTargets(scope)
 
 	changed := 0
+	total := 0
 	failed := false
 	for _, f := range targets {
+		lineSet := scope[f]
 		src, err := os.ReadFile(f) //#nosec G304
 		if err != nil {
-			fmt.Fprintf(stderr, "error: %s: %v\n", f, err)
+			fmt.Fprintf(stderr, "エラー: %s: %v\n", f, err)
 			failed = true
 			continue
 		}
-		next := rewrite(string(src))
-		if next == string(src) {
-			continue
+		next, origins := rewriteWithOrigins(string(src))
+		if next != string(src) {
+			// modeは新規作成時のみ有効。既存ファイルの権限は維持される。
+			if err := os.WriteFile(f, []byte(next), 0o600); err != nil {
+				fmt.Fprintf(stderr, "エラー: %s: %v\n", f, err)
+				failed = true
+				continue
+			}
+			changed++
+			fmt.Fprintf(stdout, "修正: %s\n", f)
 		}
-		// The mode is only honored on create; existing files keep their mode,
-		// so writing back the rewritten content does not change permissions.
-		// [Ja] mode は新規作成時のみ有効。既存ファイルは元の mode を保つため、
-		// 書き戻しても権限は変わらない。
-		if err := os.WriteFile(f, []byte(next), 0o600); err != nil {
-			fmt.Fprintf(stderr, "error: %s: %v\n", f, err)
-			failed = true
-			continue
+		// 修正の有無によらず、書き換え後の行番号で残存違反を報告する。
+		for _, h := range violations(next) {
+			if h.fixable {
+				continue
+			}
+			// 行集合がnilならファイル全体がスコープ内。
+			if lineSet != nil && !lineSet[originLine(origins, h.lineNo)] {
+				continue
+			}
+			total++
+			reportHit(stdout, f, h)
 		}
-		changed++
-		fmt.Fprintf(stdout, "fixed: %s\n", f)
 	}
 	switch {
 	case changed > 0:
-		fmt.Fprintf(stdout, "\n%d file(s) rewritten.\n", changed)
-	case !failed:
-		// Stay silent about "nothing to fix" when a failure already explains
-		// the non-zero exit, so the stdout summary never contradicts stderr.
-		// [Ja] 失敗で非ゼロ終了する場合は「修正なし」を出さない。stdout の要約が
-		// stderr の内容と矛盾しないようにするため。
-		fmt.Fprintln(stdout, "Nothing to fix.")
+		fmt.Fprintf(stdout, "\n%dファイルを書き換えた。\n", changed)
+	case !failed && total == 0:
+		// 失敗で非ゼロ終了する場合は「修正なし」を出さない。stdoutの要約が
+		// stderrの内容と矛盾しないようにするため。
+		fmt.Fprintln(stdout, "修正するものは無い。")
 	}
-	if failed {
+	if total > 0 {
+		fmt.Fprintf(stderr, "\nkoryluslint md: 違反%d件\n", total)
+	}
+
+	if failed || total > 0 {
 		return 1
 	}
 	return 0
 }
 
-// resolveScope decides which files (and which lines within them) to check.
-// A nil line set for a file means the whole file is in scope.
-//
-// [Ja] resolveScope はどのファイルの (そしてその中のどの行を) 検査するかを決める。
-// あるファイルの行集合が nil ならファイル全体がスコープ内を意味する。
+// sortedTargetsはスコープに含まれるファイルをパスの順に並べて返す。
+// 報告の並び順を検査モードと修正モードで揃えるために共有する。
+func sortedTargets(scope map[string]map[int]bool) []string {
+	files := make([]string, 0, len(scope))
+	for f := range scope {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return files
+}
+
+// reportHitは違反1件をwへ2行で出力する。
+// 1行目はファイル・行番号・メッセージ、2行目は該当行の抜粋。
+func reportHit(w io.Writer, file string, h hit) {
+	fmt.Fprintf(w, "%s:%d: %s\n", file, h.lineNo, h.msg)
+	fmt.Fprintf(w, "    %s\n", truncate(strings.TrimSpace(h.line), 100))
+}
+
+// originLineはrewriteWithOriginsの対応表を使い、書き換え後の行番号lineNoを元の
+// 行番号へ戻す。
+// 対応表の範囲外はそのままの行番号を返す。
+func originLine(origins []int, lineNo int) int {
+	if lineNo-1 < 0 || lineNo-1 >= len(origins) {
+		return lineNo
+	}
+	return origins[lineNo-1]
+}
+
+// resolveScopeはどのファイルの (そしてその中のどの行を) 検査するかを決める。
+// あるファイルの行集合がnilならファイル全体がスコープ内を意味する。
 func resolveScope(paths []string, all bool, base string) map[string]map[int]bool {
 	switch {
 	case len(paths) > 0:
@@ -269,41 +279,32 @@ func resolveScope(paths []string, all bool, base string) map[string]map[int]bool
 	}
 }
 
-// breakProse splits a single prose line at sentence-final "。" that sit at top
-// level — outside parentheses, brackets, quotes and inline code — and returns
-// the line with "\n" inserted at each such break. A "。" is not a break point
-// when it is the last non-space content, or when the next non-space rune is a
-// closing bracket/quote.
-//
-// [Ja] breakProse は地の文の 1 行を、トップレベル (括弧・角括弧・鉤括弧・インライン
-// コードの外) にある文末の「。」で分割し、各区切りに "\n" を挿入した行を返す。
+// breakProseは地の文の1行を、トップレベル (括弧・角括弧・鉤括弧の外) にある
+// 文末の「。」で分割し、各区切りに "\n" を挿入した行を返す。
 // 「。」の後ろが空白のみ、または次の非空白文字が閉じ括弧・閉じ鉤括弧のときは
 // 区切らない。
-func breakProse(line string) string {
+//
+// maskedはlineと同じルーン数を持ち、インラインコードとHTMLコメントの範囲が
+// 半角スペースに置き換わったもの (docLine.style)。
+// 区切り位置の判定はmaskedで行い、出力はlineから組み立てる。
+// これにより、改行をまたぐコード片やコメントの中の「。」で区切らずに済む。
+func breakProse(line, masked string) string {
 	var out []string
 	var buf strings.Builder
 	depth := 0
-	inCode := false
 	runes := []rune(line)
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
+	maskedRunes := []rune(masked)
+	for i, c := range runes {
 		buf.WriteRune(c)
-		if c == '`' {
-			inCode = !inCode
-			continue
-		}
-		if inCode {
-			continue
-		}
-		switch {
-		case isOpen(c):
+		switch m := maskedRunes[i]; {
+		case isOpen(m):
 			depth++
-		case isClose(c):
+		case isClose(m):
 			if depth > 0 {
 				depth--
 			}
-		case c == '。' && depth == 0:
-			rest := string(runes[i+1:])
+		case m == '。' && depth == 0:
+			rest := string(maskedRunes[i+1:])
 			if strings.TrimSpace(rest) == "" {
 				continue
 			}
@@ -321,84 +322,82 @@ func breakProse(line string) string {
 	return strings.Join(out, "\n")
 }
 
-// eachProseLine walks the document with block state and calls onProse(lineNo,
-// line) for each rendered prose line, skipping code fences, HTML comments,
-// lists, headings, tables and blockquotes.
-//
-// [Ja] eachProseLine はブロック状態を追いながら文書を走査し、コードフェンス・
-// HTML コメント・リスト・見出し・表・引用を除いた地の文の行ごとに onProse(lineNo,
-// line) を呼ぶ。
-func eachProseLine(text string, onProse func(lineNo int, line string)) {
-	lines := strings.Split(text, "\n")
-	inFence := false
-	inComment := false
-	for i, line := range lines {
-		switch {
-		case reFence.MatchString(line):
-			inFence = !inFence
-		case inFence:
-			// inside a fenced code block.
-			// [Ja] フェンス内のコードブロック。
-		case inComment:
-			if strings.Contains(line, "-->") {
-				inComment = false
-			}
-		case strings.Contains(line, "<!--") && !strings.Contains(line, "-->"):
-			inComment = true
-		case strings.Contains(line, "<!--"):
-			// single-line HTML comment.
-			// [Ja] 1 行で閉じる HTML コメント。
-		case strings.TrimSpace(line) == "":
-		case reHeading.MatchString(line):
-		case reList.MatchString(line):
-		case reTable.MatchString(line):
-		case reBlockquote.MatchString(line):
-		default:
-			onProse(i+1, line)
-		}
+// isProseはlineが句点改行の検査対象となる地の文かを返す。
+// 見出し・箇条書き・表・引用・空行は地の文ではない。
+func isProse(line string) bool {
+	switch {
+	case strings.TrimSpace(line) == "",
+		reHeading.MatchString(line),
+		reList.MatchString(line),
+		reTable.MatchString(line),
+		reBlockquote.MatchString(line):
+		return false
 	}
+	return true
 }
 
-// rewrite returns text with each prose line replaced by its broken form.
-// [Ja] rewrite は各地の文の行を改行済みの形に置き換えた text を返す。
+// eachProseLineは地の文の行ごとにonProse(dl) を呼ぶ。
+func eachProseLine(text string, onProse func(dl docLine)) {
+	eachLine(text, func(dl docLine) {
+		if dl.prose {
+			onProse(dl)
+		}
+	})
+}
+
+// rewriteは各地の文の行を改行済みの形に置き換えたtextを返す。
 func rewrite(text string) string {
+	next, _ := rewriteWithOrigins(text)
+	return next
+}
+
+// rewriteWithOriginsはrewriteの結果と、書き換え後の各行に対応する元の行番号を
+// 返す。
+// originsは書き換え後の行番号から1を引いた位置に、その行が由来する元の行番号
+// (1始まり) を持つ。
+// 改行の挿入で行番号がずれるため、書き換え後に見つけた違反を差分スコープの行
+// 集合と突き合わせるにはこの対応表が要る。
+func rewriteWithOrigins(text string) (string, []int) {
 	lines := strings.Split(text, "\n")
 	replaced := map[int]string{}
-	eachProseLine(text, func(lineNo int, line string) {
-		replaced[lineNo] = breakProse(line)
+	eachProseLine(text, func(dl docLine) {
+		replaced[dl.lineNo] = breakProse(dl.text, dl.style)
 	})
-	for i := range lines {
+
+	out := make([]string, 0, len(lines))
+	origins := make([]int, 0, len(lines))
+	for i, line := range lines {
 		if r, ok := replaced[i+1]; ok {
-			lines[i] = r
+			line = r
+		}
+		for _, part := range strings.Split(line, "\n") {
+			out = append(out, part)
+			origins = append(origins, i+1)
 		}
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(out, "\n"), origins
 }
 
-// violations returns the prose lines whose broken form differs from the input.
-// [Ja] violations は改行後の形が入力と異なる地の文の行を返す。
-func violations(text string) []proseHit {
-	var hits []proseHit
-	eachProseLine(text, func(lineNo int, line string) {
-		if breakProse(line) != line {
-			hits = append(hits, proseHit{lineNo: lineNo, line: line})
+// violationsは句点改行と §3スタイルの違反を行番号順に返す。
+// 同じ行に両方があれば句点改行を先に並べる。
+func violations(text string) []hit {
+	var hits []hit
+	eachLine(text, func(dl docLine) {
+		if dl.prose && breakProse(dl.text, dl.style) != dl.text {
+			hits = append(hits, hit{lineNo: dl.lineNo, line: dl.text, msg: msgSentence, fixable: true})
+		}
+		for _, v := range style.CheckMaskedLine(dl.style) {
+			hits = append(hits, hit{lineNo: dl.lineNo, line: dl.text, msg: v.Message})
 		}
 	})
 	return hits
 }
 
-// changedLines maps each changed .md file (relative to the working directory,
-// as git reports it) to the set of new-side line numbers changed since base
-// (HEAD when base is empty). A nil set means the whole file is in scope:
-// untracked files, or files whose diff cannot be computed. Git failures are
-// swallowed so a non-repo or detached state yields an empty scope rather than
-// an error.
-//
-// [Ja] changedLines は変更された各 .md ファイル (git が報告するパス。作業
-// ディレクトリ基準) を、base (空なら HEAD) 以降に変更された新側の行番号集合へ
-// 対応づける。集合が nil ならファイル全体がスコープ内 (未追跡ファイルや差分を
-// 計算できないファイル)。git の失敗は握りつぶし、リポジトリ外などではエラーに
-// せず空スコープにする。
+// changedLinesは変更された各 .mdファイル (gitが報告するパス。作業ディレクトリ
+// 基準) を、base (空ならHEAD) 以降に変更された新側の行番号集合へ対応づける。
+// 集合がnilならファイル全体がスコープ内 (未追跡ファイルや差分を計算できない
+// ファイル)。
+// gitの失敗は握りつぶし、リポジトリ外などではエラーにせず空スコープにする。
 func changedLines(base string) map[string]map[int]bool {
 	rangeArg := "HEAD"
 	if base != "" {
@@ -411,7 +410,7 @@ func changedLines(base string) map[string]map[int]bool {
 		return result
 	}
 	files := nonEmptyLines(nameOut)
-	// Untracked .md files are checked in full. [Ja] 未追跡の .md は全行を対象。
+	// 未追跡の .mdは全行を対象にする。
 	if untracked, uerr := gitOutput("ls-files", "--others", "--exclude-standard", "--", "*.md"); uerr == nil {
 		files = append(files, nonEmptyLines(untracked)...)
 	}
@@ -425,8 +424,7 @@ func changedLines(base string) map[string]map[int]bool {
 
 		diff, derr := gitOutput("diff", "--unified=0", rangeArg, "--", f)
 		if derr != nil || strings.TrimSpace(diff) == "" {
-			// No diff vs range (e.g. untracked): the whole file is in scope.
-			// [Ja] 差分が取れない (未追跡など) ファイルは全行を対象にする。
+			// 差分が取れない (未追跡など) ファイルは全行を対象にする。
 			result[f] = nil
 			continue
 		}
@@ -452,11 +450,8 @@ func changedLines(base string) map[string]map[int]bool {
 	return result
 }
 
-// listAllMarkdown returns every .md file under root, skipping node_modules,
-// .git and vendor directories.
-//
-// [Ja] listAllMarkdown は root 配下の全 .md ファイルを返す。node_modules・.git・
-// vendor ディレクトリはスキップする。
+// listAllMarkdownはroot配下の全 .mdファイルを返す。
+// node_modules・.git・vendorディレクトリはスキップする。
 func listAllMarkdown(root string) []string {
 	var out []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -478,8 +473,7 @@ func listAllMarkdown(root string) []string {
 	return out
 }
 
-// gitOutput runs a git command and returns its stdout.
-// [Ja] gitOutput は git コマンドを実行し標準出力を返す。
+// gitOutputはgitコマンドを実行し標準出力を返す。
 func gitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	var stdout, stderr bytes.Buffer
@@ -491,10 +485,7 @@ func gitOutput(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// nonEmptyLines splits s on newlines and drops empty entries (matching the
-// JavaScript original's split("\n").filter(Boolean)).
-//
-// [Ja] nonEmptyLines は s を改行で分割し空の要素を落とす (JavaScript 版の
+// nonEmptyLinesはsを改行で分割し空の要素を落とす (JavaScript版の
 // split("\n").filter(Boolean) に対応)。
 func nonEmptyLines(s string) []string {
 	var out []string
@@ -506,16 +497,13 @@ func nonEmptyLines(s string) []string {
 	return out
 }
 
-// isOpen reports whether r is an opening bracket or quote (half- or full-width).
-// [Ja] isOpen は r が開き括弧・開き鉤括弧 (半角・全角) かを返す。
+// isOpenはrが開き括弧・開き鉤括弧 (半角・全角) かを返す。
 func isOpen(r rune) bool { return strings.ContainsRune("(（[「『【〔《", r) }
 
-// isClose reports whether r is a closing bracket or quote (half- or full-width).
-// [Ja] isClose は r が閉じ括弧・閉じ鉤括弧 (半角・全角) かを返す。
+// isCloseはrが閉じ括弧・閉じ鉤括弧 (半角・全角) かを返す。
 func isClose(r rune) bool { return strings.ContainsRune(")）]」』】〕》", r) }
 
-// firstRune returns the first rune of s, or 0 when s is empty.
-// [Ja] firstRune は s の先頭ルーンを返す。s が空なら 0。
+// firstRuneはsの先頭ルーンを返す。sが空なら0。
 func firstRune(s string) rune {
 	for _, r := range s {
 		return r
@@ -523,8 +511,7 @@ func firstRune(s string) rune {
 	return 0
 }
 
-// truncate shortens s to at most n runes for display.
-// [Ja] truncate は表示用に s を最大 n ルーンへ短縮する。
+// truncateは表示用にsを最大nルーンへ短縮する。
 func truncate(s string, n int) string {
 	r := []rune(s)
 	if len(r) > n {

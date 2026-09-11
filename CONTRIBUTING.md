@@ -1,10 +1,10 @@
-<!-- last_synced: 2026-06-03 -->
+<!-- last_synced: 2026-09-11 -->
 
-# Contributing
+# コントリビューションについて
 
-> English | [日本語](./CONTRIBUTING.ja.md)
+> 日本語 | [English](./CONTRIBUTING.en.md)
 
-korylus-tools is open source, but we are not currently accepting external pull requests.
+korylus-toolsはオープンソースとして公開していますが、現在、外部からのプルリクエストは受け付けていません。
 
-Development is primarily handled by a single person ([@shimbaco](https://github.com/shimbaco)), and we do not have the capacity to properly review and manage external code contributions.
-The source code is published as a reference for those interested in how the Korylus projects work.
+開発は基本的に個人 ([@shimbaco](https://github.com/shimbaco)) で進めており、外部からのコード貢献を適切にレビュー・管理する余裕がないためです。
+ソースコードはKorylusプロジェクトの仕組みに興味のある方への参考として公開しています。
