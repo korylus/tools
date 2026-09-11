@@ -1,46 +1,47 @@
-<!-- last_synced: 2026-06-03 -->
+<!-- last_synced: 2026-09-11 -->
 
 # korylus-tools
 
-> English | [日本語](./README.ja.md)
+> 日本語 | [English](./README.en.md)
 
-A repository that gathers the development tools shared across the Korylus projects.
+Korylusプロジェクトで共通利用する開発ツールを集約したリポジトリです。
 
 ## koryluslint
 
-`koryluslint` is a single binary that bundles the Korylus shared linters.
-It dispatches to each linter through a subcommand.
+`koryluslint` はKorylus共通のリンタをまとめた単一バイナリです。
+サブコマンドで各リンタを呼び分けます。
 
-| Subcommand | Role                                                         |
-| ---------- | ------------------------------------------------------------ |
-| `comment`  | Check misuse of the bilingual `[Ja]` marker in code comments |
-| `md`       | Check (and fix) semantic line breaks in Markdown documents   |
+| サブコマンド | 役割                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `comment`    | コードコメントの日本語テキストスタイル (korylus-lang.md §3) を検査する                                        |
+| `md`         | Markdownドキュメントの句点改行 (semantic line break) と日本語テキストスタイル (korylus-lang.md §3) を検査する |
 
-### Usage
+### 使い方
 
 ```sh
 koryluslint comment [-base=<ref>] [paths...]
 koryluslint md [-base=<ref>] [--all] [--write] [paths...]
 ```
 
-Passing `-base=<ref>` limits the check to lines added since `<ref>` (diff scope).
+`-base=<ref>` を渡すと、`<ref>` 以降に追加された行だけを検査します (差分スコープ)。
 
-For `md`, `--all` checks every `.md` file in full instead of only changed lines, and `--write` rewrites the offending lines in place instead of reporting them.
+`md` では、`--all` は差分行だけでなく全 `.md` ファイルを全行検査し、`--write` は句点改行をその場で修正します。
+日本語テキストスタイルの違反は書き換え後の行番号で報告し、違反が残る場合は終了コード1を返します。
 
-## Installing and running
+## 取得・実行
 
-Each project pins a version of `koryluslint` to fetch it.
+各プロジェクトはバージョンを固定して `koryluslint` を取得します。
 
-- Go projects: pin `github.com/korylus/tools/cmd/koryluslint` with the `tool` directive in `go.mod` and run it with `go tool koryluslint ...`.
-- Non-Go projects: pin it with mise's `go:` backend.
+- Goプロジェクト: `go.mod` のtoolディレクティブで `github.com/korylus/tools/cmd/koryluslint` を固定し、`go tool koryluslint ...` で実行する
+- 非Goプロジェクト: miseの `go:` バックエンドで固定取得する
 
-## Development
+## 開発
 
 ```sh
-make build       # build koryluslint (to bin/koryluslint)
-make test        # run the tests
-make vet         # run go vet
-make lint        # run golangci-lint
-make fmt         # format with gofmt + goimports + Oxfmt
-make fmt-check   # check formatting
+make build       # koryluslintをビルド (bin/koryluslint)
+make test        # テストを実行
+make vet         # go vetを実行
+make lint        # golangci-lintを実行
+make fmt         # gofmt + goimports + Oxfmtでフォーマット
+make fmt-check   # フォーマットチェック
 ```

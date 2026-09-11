@@ -3,10 +3,42 @@ package md
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// msgsOfは違反のメッセージの一覧を返す。
+func msgsOf(hits []hit) []string {
+	got := make([]string, len(hits))
+	for i, h := range hits {
+		got[i] = h.msg
+	}
+	return got
+}
+
+// linesOfは違反の行番号の一覧を返す。
+func linesOf(hits []hit) []int {
+	got := make([]int, len(hits))
+	for i, h := range hits {
+		got[i] = h.lineNo
+	}
+	return got
+}
+
+// maskedLineOfはlineを1行だけのドキュメントとして走査し、breakProseへ渡す
+// マスク済みの行を返す。
+// マスクの組み立てはeachLineの責務なので、テストで手書きせずに実物を使う。
+func maskedLineOf(t *testing.T, line string) string {
+	t.Helper()
+
+	var masked string
+	eachLine(line+"\n", func(dl docLine) {
+		masked = dl.style
+	})
+	return masked
+}
 
 func TestBreakProse(t *testing.T) {
 	t.Parallel()
@@ -17,47 +49,47 @@ func TestBreakProse(t *testing.T) {
 		want string
 	}{
 		{
-			name: "single sentence is unchanged",
+			name: "1文だけの行はそのまま",
 			in:   "一文だけ。",
 			want: "一文だけ。",
 		},
 		{
-			name: "two sentences break at the inner 。",
+			name: "2文は内側の「。」で改行する",
 			in:   "これは一文目です。これは二文目です。",
 			want: "これは一文目です。\nこれは二文目です。",
 		},
 		{
-			name: "。 inside half-width parentheses is preserved",
+			name: "半角丸括弧の中の「。」は壊さない",
 			in:   "括弧 (中の。は壊さない) の外。次の文。",
 			want: "括弧 (中の。は壊さない) の外。\n次の文。",
 		},
 		{
-			name: "。 inside full-width parentheses is preserved",
+			name: "全角丸括弧の中の「。」は壊さない",
 			in:   "全角 （中の。は壊さない） の外。次。",
 			want: "全角 （中の。は壊さない） の外。\n次。",
 		},
 		{
-			name: "。 inside square and kagi brackets is preserved",
+			name: "角括弧・鉤括弧の中の「。」は壊さない",
 			in:   "角 [a。b] と鉤 「c。d」 の外。次。",
 			want: "角 [a。b] と鉤 「c。d」 の外。\n次。",
 		},
 		{
-			name: "。 inside inline code is preserved",
+			name: "インラインコードの中の「。」は壊さない",
 			in:   "コード `a。b` の後。終わり。",
 			want: "コード `a。b` の後。\n終わり。",
 		},
 		{
-			name: "。 immediately followed by a closing quote does not break",
+			name: "「。」の直後が閉じ鉤括弧なら改行しない",
 			in:   "「文。」と続く。",
 			want: "「文。」と続く。",
 		},
 		{
-			name: "trailing 。 produces no empty segment",
+			name: "末尾の「。」では空の要素を作らない",
 			in:   "末尾の文。",
 			want: "末尾の文。",
 		},
 		{
-			name: "English prose with no 。 is unchanged",
+			name: "「。」の無い英文はそのまま",
 			in:   "This line has no Japanese period.",
 			want: "This line has no Japanese period.",
 		},
@@ -67,62 +99,55 @@ func TestBreakProse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := breakProse(tt.in); got != tt.want {
-				t.Errorf("breakProse(%q) = %q, want %q", tt.in, got, tt.want)
+			if got := breakProse(tt.in, maskedLineOf(t, tt.in)); got != tt.want {
+				t.Errorf("breakProse(%q) = %q、期待値 = %q", tt.in, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestEachProseLine confirms that only rendered prose lines are surfaced:
-// headings, lists, tables, blockquotes, code fences, HTML comments and blank
-// lines are all skipped.
-//
-// [Ja] TestEachProseLine は地の文の行だけが拾われ、見出し・リスト・表・引用・
-// コードフェンス・HTML コメント・空行がすべてスキップされることを確認する。
+// TestEachProseLineは地の文の行だけが拾われ、見出し・リスト・表・引用・
+// コードフェンス・HTMLコメント・空行がすべてスキップされることを確認する。
 func TestEachProseLine(t *testing.T) {
 	t.Parallel()
 
 	doc := strings.Join([]string{
-		"# Heading", // 1: heading
-		"",          // 2: blank
-		"これは地の文。これは二文目。", // 3: prose
-		"",                    // 4: blank
-		"- リスト項目。これは無視。",      // 5: list
-		"",                    // 6: blank
-		"| 表 | の。行 |",         // 7: table
-		"",                    // 8: blank
-		"> 引用。無視。",            // 9: blockquote
-		"",                    // 10: blank
-		"```",                 // 11: fence open
-		"fence内。無視。",          // 12: inside fence
-		"```",                 // 13: fence close
-		"",                    // 14: blank
-		"<!-- comment。無視 -->", // 15: single-line comment
-		"",                    // 16: blank
-		"普通の段落。続き。",           // 17: prose
+		"# 見出し", // 1: 見出し
+		"",      // 2: 空行
+		"これは地の文。これは二文目。", // 3: 地の文
+		"",                 // 4: 空行
+		"- リスト項目。これは無視。",   // 5: リスト
+		"",                 // 6: 空行
+		"| 表 | の。行 |",      // 7: 表
+		"",                 // 8: 空行
+		"> 引用。無視。",         // 9: 引用
+		"",                 // 10: 空行
+		"```",              // 11: フェンス開始
+		"fence内。無視。",       // 12: フェンス内
+		"```",              // 13: フェンス終了
+		"",                 // 14: 空行
+		"<!-- コメント。無視 -->", // 15: 1行で閉じるコメント
+		"",                 // 16: 空行
+		"普通の段落。続き。",        // 17: 地の文
 	}, "\n")
 
 	var got []int
-	eachProseLine(doc, func(lineNo int, _ string) {
-		got = append(got, lineNo)
+	eachProseLine(doc, func(dl docLine) {
+		got = append(got, dl.lineNo)
 	})
 
 	want := []int{3, 17}
 	if len(got) != len(want) {
-		t.Fatalf("prose lines = %v, want %v", got, want)
+		t.Fatalf("地の文の行 = %v、期待値 = %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("prose lines = %v, want %v", got, want)
+			t.Fatalf("地の文の行 = %v、期待値 = %v", got, want)
 		}
 	}
 }
 
-// TestEachProseLineMultiLineComment confirms a multi-line HTML comment block is
-// skipped entirely.
-//
-// [Ja] TestEachProseLineMultiLineComment は複数行の HTML コメントブロックが
+// TestEachProseLineMultiLineCommentは複数行のHTMLコメントブロックが
 // まるごとスキップされることを確認する。
 func TestEachProseLineMultiLineComment(t *testing.T) {
 	t.Parallel()
@@ -135,32 +160,29 @@ func TestEachProseLineMultiLineComment(t *testing.T) {
 	}, "\n")
 
 	var got []int
-	eachProseLine(doc, func(lineNo int, _ string) {
-		got = append(got, lineNo)
+	eachProseLine(doc, func(dl docLine) {
+		got = append(got, dl.lineNo)
 	})
 
 	if len(got) != 1 || got[0] != 4 {
-		t.Errorf("prose lines = %v, want [4]", got)
+		t.Errorf("地の文の行 = %v、期待値 = [4]", got)
 	}
 }
 
-// TestRewrite confirms that only prose lines are rewritten; structural lines
-// (headings, lists, code fences) pass through untouched.
-//
-// [Ja] TestRewrite は地の文の行だけが書き換えられ、構造行 (見出し・リスト・
+// TestRewriteは地の文の行だけが書き換えられ、構造行 (見出し・リスト・
 // コードフェンス) はそのまま通ることを確認する。
 func TestRewrite(t *testing.T) {
 	t.Parallel()
 
 	in := strings.Join([]string{
-		"# Title",
+		"# タイトル",
 		"",
 		"一文目。二文目。",
 		"",
 		"- 項目。これはリストなので無視。",
 	}, "\n")
 	want := strings.Join([]string{
-		"# Title",
+		"# タイトル",
 		"",
 		"一文目。",
 		"二文目。",
@@ -169,7 +191,21 @@ func TestRewrite(t *testing.T) {
 	}, "\n")
 
 	if got := rewrite(in); got != want {
-		t.Errorf("rewrite() =\n%q\nwant\n%q", got, want)
+		t.Errorf("rewrite() =\n%q\n期待値\n%q", got, want)
+	}
+}
+
+// TestRewriteKeepsStyleViolationsは --writeが §3スタイルの違反を書き換えない
+// ことを確認する。全角丸括弧の半角化は前後のスペースの調整を伴い、機械的に
+// 直せないため報告に留める。
+func TestRewriteKeepsStyleViolations(t *testing.T) {
+	t.Parallel()
+
+	in := "全角（括弧）を含む一文目。二文目。"
+	want := "全角（括弧）を含む一文目。\n二文目。"
+
+	if got := rewrite(in); got != want {
+		t.Errorf("rewrite() =\n%q\n期待値\n%q", got, want)
 	}
 }
 
@@ -177,17 +213,166 @@ func TestViolations(t *testing.T) {
 	t.Parallel()
 
 	doc := strings.Join([]string{
-		"一文目。二文目。", // line 1: violation
-		"",         // line 2
-		"単独の文。",    // line 3: clean
+		"一文目。二文目。", // 1行目: 違反
+		"",         // 2行目
+		"単独の文。",    // 3行目: 違反なし
 	}, "\n")
 
 	hits := violations(doc)
 	if len(hits) != 1 {
-		t.Fatalf("got %d violations, want 1", len(hits))
+		t.Fatalf("違反 %d件、期待値 = 1件", len(hits))
 	}
 	if hits[0].lineNo != 1 {
-		t.Errorf("violation line = %d, want 1", hits[0].lineNo)
+		t.Errorf("違反の行番号 = %d、期待値 = 1", hits[0].lineNo)
+	}
+	if !hits[0].fixable {
+		t.Error("句点改行の違反は --writeで直せるものとして扱う")
+	}
+}
+
+// TestViolationsStyleは §3スタイルの検査が地の文だけでなく見出し・箇条書き・
+// 表・引用にも適用され、コードフェンスとHTMLコメントの中には適用されないことを
+// 確認する。
+func TestViolationsStyle(t *testing.T) {
+	t.Parallel()
+
+	doc := strings.Join([]string{
+		"# REST API の見出し", // 1: 見出し (§3.2)
+		"",                // 2
+		"地の文に全角（括弧）がある。", // 3: 地の文 (§3.1)
+		"",             // 4
+		"- 最大 20 文字まで", // 5: 箇条書き (§3.2)
+		"",             // 6
+		"| 列 | Go 版 |", // 7: 表 (§3.2)
+		"",             // 8
+		"> 引用の Go 版",   // 9: 引用 (§3.2)
+		"",             // 10
+		"```",          // 11
+		"fence内の（括弧）",  // 12: フェンス内なので対象外
+		"```",          // 13
+		"",             // 14
+		"<!--",         // 15
+		"コメント内の（括弧）",   // 16: コメント内なので対象外
+		"-->",          // 17
+	}, "\n")
+
+	got := linesOf(violations(doc))
+	want := []int{1, 3, 5, 7, 9}
+	if len(got) != len(want) {
+		t.Fatalf("違反の行番号 = %v、期待値 = %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("違反の行番号 = %v、期待値 = %v", got, want)
+		}
+	}
+	for _, h := range violations(doc) {
+		if h.fixable {
+			t.Errorf("%d行目: §3スタイルの違反は --writeで直せるものとして扱わない", h.lineNo)
+		}
+	}
+}
+
+// TestViolationsInlineCommentは1行で閉じるHTMLコメントが §3の検査から外れ、
+// 同じ行の残りは検査対象に残ることを確認する。
+// ガイドラインは悪い例に注記としてコメントを添えるため、コメントを含む行を
+// まるごと外すと悪い例の検出漏れになる。
+func TestViolationsInlineComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		doc      string
+		wantHits int
+	}{
+		{
+			name:     "注記の中の全角丸括弧は対象外",
+			doc:      "- 半角に直す <!-- 全角丸括弧（）は使わない -->",
+			wantHits: 0,
+		},
+		{
+			name:     "注記を除いた本文は対象に残る",
+			doc:      "- 半角英数字とアンダースコアのみ（最大20文字） <!-- 全角丸括弧を使っている -->",
+			wantHits: 1,
+		},
+		{
+			name:     "インラインコードで囲んだ悪い例は対象外",
+			doc:      "- `半角英数字とアンダースコアのみ（最大20文字）` <!-- 全角丸括弧を使っている -->",
+			wantHits: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := violations(tt.doc); len(got) != tt.wantHits {
+				t.Errorf("violations(%q) = %v、期待値 = %d件", tt.doc, msgsOf(got), tt.wantHits)
+			}
+		})
+	}
+}
+
+// TestViolationsInlineCommentSentenceBreakは、1行で閉じるHTMLコメントを含む行
+// でも句点改行を検査し、コメントの中の「。」では区切らないことを確認する。
+// コメントを含む行をまるごと外すと、注記を添えた地の文の句点改行を見逃す。
+func TestViolationsInlineCommentSentenceBreak(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		doc      string
+		wantHits int
+		want     string
+	}{
+		{
+			name:     "注記より前の本文は句点改行の対象",
+			doc:      "本文です。ここも文です。 <!-- 注記 -->\n",
+			wantHits: 1,
+			want:     "本文です。\nここも文です。 <!-- 注記 -->\n",
+		},
+		{
+			name:     "注記の中の「。」では区切らない",
+			doc:      "本文です。 <!-- 注記。です -->\n",
+			wantHits: 0,
+			want:     "本文です。 <!-- 注記。です -->\n",
+		},
+		{
+			name:     "複数行コメントの中は対象外",
+			doc:      "<!--\nコメント。二文目。\n-->\n",
+			wantHits: 0,
+			want:     "<!--\nコメント。二文目。\n-->\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := violations(tt.doc); len(got) != tt.wantHits {
+				t.Errorf("violations(%q) = %v、期待値 = %d件", tt.doc, msgsOf(got), tt.wantHits)
+			}
+			if got := rewrite(tt.doc); got != tt.want {
+				t.Errorf("書き換え結果 = %q、期待値 = %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestViolationsOrderは同じ行に句点改行と §3スタイルの違反があるとき、
+// 句点改行が先に並ぶことを確認する。
+func TestViolationsOrder(t *testing.T) {
+	t.Parallel()
+
+	hits := violations("全角（括弧）の一文目。二文目。")
+	if len(hits) != 2 {
+		t.Fatalf("違反 %d件、期待値 = 2件 (%v)", len(hits), msgsOf(hits))
+	}
+	if hits[0].msg != msgSentence {
+		t.Errorf("1件目 = %q、期待値 = %q", hits[0].msg, msgSentence)
+	}
+	if !strings.HasPrefix(hits[1].msg, "§3.1") {
+		t.Errorf("2件目 = %q、期待値 = §3.1の違反", hits[1].msg)
 	}
 }
 
@@ -197,30 +382,25 @@ func TestListAllMarkdown(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.md"), "x")
 	writeFile(t, filepath.Join(dir, "sub", "b.md"), "x")
-	// Skipped directories must not contribute files.
-	// [Ja] スキップ対象のディレクトリのファイルは含めない。
+	// スキップ対象のディレクトリのファイルは含めない。
 	writeFile(t, filepath.Join(dir, "node_modules", "c.md"), "x")
 	writeFile(t, filepath.Join(dir, ".git", "d.md"), "x")
 	writeFile(t, filepath.Join(dir, "vendor", "e.md"), "x")
-	writeFile(t, filepath.Join(dir, "f.txt"), "x") // not markdown
+	writeFile(t, filepath.Join(dir, "f.txt"), "x") // Markdownではない
 
 	got := listAllMarkdown(dir)
 	if len(got) != 2 {
-		t.Fatalf("listAllMarkdown found %v, want 2 files (a.md, sub/b.md)", got)
+		t.Fatalf("listAllMarkdownの結果 = %v、期待値 = 2ファイル (a.md, sub/b.md)", got)
 	}
 	for _, p := range got {
 		if !strings.HasSuffix(p, "a.md") && !strings.HasSuffix(p, "b.md") {
-			t.Errorf("unexpected file %q in result", p)
+			t.Errorf("結果に想定外のファイル %q が含まれる", p)
 		}
 	}
 }
 
-// TestRunCheckExplicitPaths runs the subcommand over an explicit file: a prose
-// line with two sentences is reported on stdout with a summary on stderr, and
-// the exit code is 1.
-//
-// [Ja] TestRunCheckExplicitPaths は明示ファイルに対してサブコマンドを動かす。
-// 2 文を含む地の文が stdout に報告され、要約が stderr に出て、終了コードは 1。
+// TestRunCheckExplicitPathsは明示ファイルに対してサブコマンドを動かす。
+// 2文を含む地の文がstdoutに報告され、要約がstderrに出て、終了コードは1。
 func TestRunCheckExplicitPaths(t *testing.T) {
 	t.Parallel()
 
@@ -232,18 +412,44 @@ func TestRunCheckExplicitPaths(t *testing.T) {
 	code := Run([]string{bad}, &stdout, &stderr)
 
 	if code != 1 {
-		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+		t.Fatalf("Runの終了コード = %d、期待値 = 1 (stderr: %s)", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), bad+":1:") {
-		t.Errorf("stdout = %q, want a finding at %s:1", stdout.String(), bad)
+		t.Errorf("stdout = %q、期待値 = %s:1の指摘", stdout.String(), bad)
 	}
-	if !strings.Contains(stderr.String(), "semantic-line-break violation") {
-		t.Errorf("stderr = %q, want a violation summary", stderr.String())
+	if !strings.Contains(stderr.String(), "違反1件") {
+		t.Errorf("stderr = %q、期待値 = 違反の要約", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--write") {
+		t.Errorf("stderr = %q、期待値 = --writeの案内", stderr.String())
 	}
 }
 
-// TestRunCheckClean confirms a one-sentence-per-line file exits 0 with no output.
-// [Ja] TestRunCheckClean は 1 文 1 行のファイルが無出力・終了コード 0 になることを確認する。
+// TestRunCheckReportsStyleは §3スタイルの違反がstdoutに報告され、--writeの
+// 案内が出ないことを確認する。
+func TestRunCheckReportsStyle(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.md")
+	writeFile(t, bad, "# 見出し\n\n全角（括弧）を使っている。\n")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{bad}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("Runの終了コード = %d、期待値 = 1 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), bad+":3: §3.1") {
+		t.Errorf("stdout = %q、期待値 = %s:3の §3.1の指摘", stdout.String(), bad)
+	}
+	if strings.Contains(stderr.String(), "--write") {
+		t.Errorf("stderr = %q、期待値 = --writeの案内なし (スタイル違反は自動修正できない)", stderr.String())
+	}
+}
+
+// TestRunCheckCleanは1文1行で §3に従うファイルが無出力・終了コード0になることを
+// 確認する。
 func TestRunCheckClean(t *testing.T) {
 	t.Parallel()
 
@@ -255,21 +461,16 @@ func TestRunCheckClean(t *testing.T) {
 	code := Run([]string{good}, &stdout, &stderr)
 
 	if code != 0 {
-		t.Fatalf("Run code = %d, want 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+		t.Fatalf("Runの終了コード = %d、期待値 = 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
 	}
 	if stdout.String() != "" {
-		t.Errorf("stdout = %q, want empty", stdout.String())
+		t.Errorf("stdout = %q、期待値 = 空", stdout.String())
 	}
 }
 
-// TestRunCheckReadErrorExitsNonZero confirms that, with an explicit path that
-// cannot be read, check mode reports the error on stderr and exits non-zero
-// instead of silently passing. This mirrors --write's treatment of a bad
-// explicit path.
-//
-// [Ja] TestRunCheckReadErrorExitsNonZero は、読めない明示パスを渡したとき
-// check モードが stderr へ報告して非ゼロ終了し、黙って成功扱いにしないことを
-// 確認する。--write の明示パス読み取り失敗の扱いと揃える。
+// TestRunCheckReadErrorExitsNonZeroは、読めない明示パスを渡したときcheckモードが
+// stderrへ報告して非ゼロ終了し、黙って成功扱いにしないことを確認する。
+// --writeの明示パス読み取り失敗の扱いと揃える。
 func TestRunCheckReadErrorExitsNonZero(t *testing.T) {
 	t.Parallel()
 
@@ -280,24 +481,20 @@ func TestRunCheckReadErrorExitsNonZero(t *testing.T) {
 	code := Run([]string{missing}, &stdout, &stderr)
 
 	if code == 0 {
-		t.Fatalf("Run code = %d, want non-zero (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+		t.Fatalf("Runの終了コード = %d、期待値 = 非ゼロ (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "error:") {
-		t.Errorf("stderr = %q, want an 'error:' line", stderr.String())
+	if !strings.Contains(stderr.String(), "エラー:") {
+		t.Errorf("stderr = %q、期待値 = エラー行", stderr.String())
 	}
 }
 
-// TestRunAllReadErrorIsSwallowed confirms that in --all mode a read failure on a
-// walked file is swallowed (no error, exit 0), staying faithful to the Node
-// original's check mode. It is skipped as root, which bypasses mode bits.
-//
-// [Ja] TestRunAllReadErrorIsSwallowed は、--all モードで走査対象ファイルの
-// 読み取りに失敗しても握りつぶされる (エラーなし・終了コード 0) ことを確認し、
-// Node 版 check モードに忠実であることを担保する。mode を無視する root 実行時は
-// スキップする。
+// TestRunAllReadErrorIsSwallowedは、--allモードで走査対象ファイルの読み取りに
+// 失敗しても握りつぶされる (エラーなし・終了コード0) ことを確認し、Node版
+// checkモードに忠実であることを担保する。
+// modeを無視するroot実行時はスキップする。
 func TestRunAllReadErrorIsSwallowed(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("running as root bypasses file mode permissions")
+		t.Skip("root実行ではファイルのmodeによる権限制御が効かない")
 	}
 
 	dir := t.TempDir()
@@ -313,15 +510,15 @@ func TestRunAllReadErrorIsSwallowed(t *testing.T) {
 	code := Run([]string{"--all"}, &stdout, &stderr)
 
 	if code != 0 {
-		t.Fatalf("Run --all code = %d, want 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+		t.Fatalf("Run --allの終了コード = %d、期待値 = 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
 	}
-	if strings.Contains(stderr.String(), "error:") {
-		t.Errorf("stderr = %q, want no 'error:' line (--all swallows read failures)", stderr.String())
+	if strings.Contains(stderr.String(), "エラー:") {
+		t.Errorf("stderr = %q、期待値 = エラー行なし (--allは読み取り失敗を握りつぶす)", stderr.String())
 	}
 }
 
-// TestRunWrite confirms --write rewrites the file in place and exits 0.
-// [Ja] TestRunWrite は --write がファイルをその場で書き換え、終了コード 0 を返すことを確認する。
+// TestRunWriteは --writeがファイルをその場で書き換え、終了コード0を返すことを
+// 確認する。
 func TestRunWrite(t *testing.T) {
 	t.Parallel()
 
@@ -333,26 +530,22 @@ func TestRunWrite(t *testing.T) {
 	code := Run([]string{"--write", bad}, &stdout, &stderr)
 
 	if code != 0 {
-		t.Fatalf("Run code = %d, want 0 (stderr: %s)", code, stderr.String())
+		t.Fatalf("Runの終了コード = %d、期待値 = 0 (stderr: %s)", code, stderr.String())
 	}
 	got, err := os.ReadFile(bad) //#nosec G304
 	if err != nil {
-		t.Fatalf("read back: %v", err)
+		t.Fatalf("読み戻し: %v", err)
 	}
 	if string(got) != "一文目。\n二文目。\n" {
-		t.Errorf("rewritten file = %q, want %q", string(got), "一文目。\n二文目。\n")
+		t.Errorf("書き換え後のファイル = %q、期待値 = %q", string(got), "一文目。\n二文目。\n")
 	}
-	if !strings.Contains(stdout.String(), "fixed:") {
-		t.Errorf("stdout = %q, want a 'fixed:' line", stdout.String())
+	if !strings.Contains(stdout.String(), "修正:") {
+		t.Errorf("stdout = %q、期待値 = 修正行", stdout.String())
 	}
 }
 
-// TestRunWriteReadErrorExitsNonZero confirms a --write run that cannot read an
-// explicit path reports the error on stderr and exits non-zero, instead of
-// silently succeeding.
-//
-// [Ja] TestRunWriteReadErrorExitsNonZero は --write で明示パスを読めない場合に
-// stderr へ報告して非ゼロ終了し、黙って成功扱いにしないことを確認する。
+// TestRunWriteReadErrorExitsNonZeroは --writeで明示パスを読めない場合に
+// stderrへ報告して非ゼロ終了し、黙って成功扱いにしないことを確認する。
 func TestRunWriteReadErrorExitsNonZero(t *testing.T) {
 	t.Parallel()
 
@@ -363,25 +556,21 @@ func TestRunWriteReadErrorExitsNonZero(t *testing.T) {
 	code := Run([]string{"--write", missing}, &stdout, &stderr)
 
 	if code == 0 {
-		t.Fatalf("Run --write code = %d, want non-zero (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+		t.Fatalf("Run --writeの終了コード = %d、期待値 = 非ゼロ (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "error:") {
-		t.Errorf("stderr = %q, want an 'error:' line", stderr.String())
+	if !strings.Contains(stderr.String(), "エラー:") {
+		t.Errorf("stderr = %q、期待値 = エラー行", stderr.String())
 	}
 }
 
-// TestRunWriteWriteErrorExitsNonZero confirms a --write run that cannot write
-// back (the target is read-only) reports the error on stderr and exits
-// non-zero. It is skipped when running as root, which bypasses mode bits.
-//
-// [Ja] TestRunWriteWriteErrorExitsNonZero は書き戻せない (対象が読み取り専用) 場合に
-// --write が stderr へ報告して非ゼロ終了することを確認する。mode を無視する root
-// 実行時はスキップする。
+// TestRunWriteWriteErrorExitsNonZeroは書き戻せない (対象が読み取り専用) 場合に
+// --writeがstderrへ報告して非ゼロ終了することを確認する。
+// modeを無視するroot実行時はスキップする。
 func TestRunWriteWriteErrorExitsNonZero(t *testing.T) {
 	t.Parallel()
 
 	if os.Geteuid() == 0 {
-		t.Skip("running as root bypasses file mode permissions")
+		t.Skip("root実行ではファイルのmodeによる権限制御が効かない")
 	}
 
 	dir := t.TempDir()
@@ -395,17 +584,14 @@ func TestRunWriteWriteErrorExitsNonZero(t *testing.T) {
 	code := Run([]string{"--write", readonly}, &stdout, &stderr)
 
 	if code == 0 {
-		t.Fatalf("Run --write code = %d, want non-zero (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+		t.Fatalf("Run --writeの終了コード = %d、期待値 = 非ゼロ (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "error:") {
-		t.Errorf("stderr = %q, want an 'error:' line", stderr.String())
+	if !strings.Contains(stderr.String(), "エラー:") {
+		t.Errorf("stderr = %q、期待値 = エラー行", stderr.String())
 	}
 }
 
-// TestRunAll confirms --all checks every .md under the working directory.
-// It changes the working directory, so it does not run in parallel.
-//
-// [Ja] TestRunAll は --all が作業ディレクトリ配下の全 .md を検査することを確認する。
+// TestRunAllは --allが作業ディレクトリ配下の全 .mdを検査することを確認する。
 // 作業ディレクトリを変更するため並列実行しない。
 func TestRunAll(t *testing.T) {
 	dir := t.TempDir()
@@ -416,26 +602,25 @@ func TestRunAll(t *testing.T) {
 	code := Run([]string{"--all"}, &stdout, &stderr)
 
 	if code != 1 {
-		t.Fatalf("Run --all code = %d, want 1 (stderr: %s)", code, stderr.String())
+		t.Fatalf("Run --allの終了コード = %d、期待値 = 1 (stderr: %s)", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "bad.md:1:") {
-		t.Errorf("stdout = %q, want a finding at bad.md:1", stdout.String())
+		t.Errorf("stdout = %q、期待値 = bad.md:1の指摘", stdout.String())
 	}
 }
 
-// TestRunHelpExitsZero confirms a -h request is treated as success.
-// [Ja] TestRunHelpExitsZero は -h 要求が成功扱いになることを確認する。
+// TestRunHelpExitsZeroは -h要求が成功扱いになることを確認する。
 func TestRunHelpExitsZero(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"-h"}, &stdout, &stderr); code != 0 {
-		t.Errorf("Run(-h) code = %d, want 0", code)
+		t.Errorf("Run(-h) の終了コード = %d、期待値 = 0", code)
 	}
 }
 
-// writeFile writes content to path (creating parent dirs), failing on error.
-// [Ja] writeFile は path に content を書き出す (親ディレクトリも作る)。失敗時はテストを止める。
+// writeFileはpathにcontentを書き出す (親ディレクトリも作る)。失敗時はテストを
+// 止める。
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -443,5 +628,208 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestRunWriteReportsRemainingStyleは修正が無い場合にも違反を報告し、
+// 改行を挿入した場合は更新後の行番号を報告することを確認する。
+func TestRunWriteReportsRemainingStyle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		line    string
+		changed bool
+	}{
+		{"スタイル違反のみ", "全角（括弧）。\n", "全角（括弧）。\n", ":1:", false},
+		{"改行とスタイル違反", "一文目。全角（括弧）。\n", "一文目。\n全角（括弧）。\n", ":2:", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			file := filepath.Join(t.TempDir(), "doc.md")
+			writeFile(t, file, tt.in)
+			var stdout, stderr bytes.Buffer
+			if code := Run([]string{"--write", file}, &stdout, &stderr); code != 1 {
+				t.Fatalf("終了コード = %d、期待値 = 1 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), file+tt.line+" §3.1") {
+				t.Errorf("stdout = %q、期待値 = 修正後の行番号での違反報告", stdout.String())
+			}
+			if strings.Contains(stdout.String(), "修正:") != tt.changed {
+				t.Errorf("stdout = %q、修正報告の期待値 = %t", stdout.String(), tt.changed)
+			}
+			if strings.Contains(stdout.String(), "修正するものは無い") {
+				t.Errorf("未修正の違反が残っているのに修正なしと報告している: %q", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "違反1件") || strings.Contains(stderr.String(), "--write") {
+				t.Errorf("stderr = %q、期待値 = 残存違反の件数のみ", stderr.String())
+			}
+			got, err := os.ReadFile(file) //#nosec G304
+			if err != nil {
+				t.Fatalf("読み戻し: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("ファイル = %q、期待値 = %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// initGitRepoはgitリポジトリを作り、nameにcontentを書いてコミットしたうえで、
+// 作業ディレクトリをそのリポジトリへ移す。
+// 差分スコープはgitの出力に依存するため、gitが無い環境ではスキップする。
+func initGitRepo(t *testing.T, name, content string) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("gitが無いため差分スコープを検証できない")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	writeFile(t, path, content)
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+		{"config", "commit.gpgsign", "false"},
+		{"add", "-A"},
+		{"commit", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...) //#nosec G204
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	t.Chdir(dir)
+
+	return path
+}
+
+// TestRunWriteIgnoresViolationsOutsideDiffScopeは、差分スコープでの --writeが
+// 触っていない行の残存違反を報告しないことを確認する。
+// 報告を絞らないと、既存違反を含むファイルを1行編集しただけで修正用のターゲット
+// が失敗する。
+// 作業ディレクトリを変更するため並列実行しない。
+func TestRunWriteIgnoresViolationsOutsideDiffScope(t *testing.T) {
+	path := initGitRepo(t, "doc.md", "既存の行に全角（括弧）がある。\n")
+	writeFile(t, path, "既存の行に全角（括弧）がある。\n\n追加した行。もう一文。\n")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--write"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("終了コード = %d、期待値 = 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "doc.md:1:") {
+		t.Errorf("stdout = %q、期待値 = 触っていない1行目の違反を報告しない", stdout.String())
+	}
+	want := "既存の行に全角（括弧）がある。\n\n追加した行。\nもう一文。\n"
+	got, err := os.ReadFile(path) //#nosec G304
+	if err != nil {
+		t.Fatalf("読み戻し: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("書き換え後のファイル = %q、期待値 = %q", got, want)
+	}
+}
+
+// TestRunWriteReportsViolationsInDiffScopeは、差分スコープでの --writeが変更した
+// 行の残存違反を、書き換えでずれた後の行番号で報告することを確認する。
+// 作業ディレクトリを変更するため並列実行しない。
+func TestRunWriteReportsViolationsInDiffScope(t *testing.T) {
+	path := initGitRepo(t, "doc.md", "既存の行に全角（括弧）がある。\n")
+	writeFile(t, path, "既存の行に全角（括弧）がある。\n\n追加した行。全角（括弧）の二文目。\n")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--write"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("終了コード = %d、期待値 = 1 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+	}
+	// 3行目が2行に分かれるため、残った違反は4行目になる。
+	if !strings.Contains(stdout.String(), "doc.md:4: §3.1") {
+		t.Errorf("stdout = %q、期待値 = doc.md:4の §3.1の指摘", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "doc.md:1:") {
+		t.Errorf("stdout = %q、期待値 = 触っていない1行目の違反を報告しない", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "違反1件") {
+		t.Errorf("stderr = %q、期待値 = 残存違反の件数", stderr.String())
+	}
+}
+
+// TestRunCheckIgnoresViolationsOutsideDiffScopeは、checkモードの差分スコープが
+// スタイル違反にも効くことを確認する。
+// 作業ディレクトリを変更するため並列実行しない。
+func TestRunCheckIgnoresViolationsOutsideDiffScope(t *testing.T) {
+	path := initGitRepo(t, "doc.md", "既存の行に全角（括弧）がある。\n")
+	writeFile(t, path, "既存の行に全角（括弧）がある。\n\n追加した行に全角（括弧）がある。\n")
+
+	var stdout, stderr bytes.Buffer
+	code := Run(nil, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("終了コード = %d、期待値 = 1 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "doc.md:3: §3.1") {
+		t.Errorf("stdout = %q、期待値 = doc.md:3の §3.1の指摘", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "doc.md:1:") {
+		t.Errorf("stdout = %q、期待値 = 触っていない1行目の違反を報告しない", stdout.String())
+	}
+}
+
+// TestRunReportsProseBetweenCodeSpansは、ASTでコード片を除外した後も本文の
+// 違反を検出し、検査・修正の両モードで失敗として報告することを確認する。
+func TestRunReportsProseBetweenCodeSpans(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		doc  string
+		line string
+	}{
+		{"複数行のコード片の後ろ", "`コード\n続き` 本文（違反） Go 版 `コード（除外） Go 版`\n", ":2:"},
+		{"複数バッククォートのコード片の後ろ", "``コード `\n続き`` 本文（違反） Go 版 ``コード（除外） Go 版``\n", ":2:"},
+		{"エスケープされたバッククォート", "\\`本文（違反） Go 版\\`\n", ":1:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, write := range []bool{false, true} {
+				file := filepath.Join(t.TempDir(), "doc.md")
+				writeFile(t, file, tt.doc)
+				args := []string{file}
+				if write {
+					args = append([]string{"--write"}, args...)
+				}
+				var stdout, stderr bytes.Buffer
+				if code := Run(args, &stdout, &stderr); code != 1 {
+					t.Fatalf("write=%t: 終了コード = %d、期待値 = 1 (stdout: %s, stderr: %s)", write, code, stdout.String(), stderr.String())
+				}
+				for _, section := range []string{"3.1", "3.2"} {
+					if !strings.Contains(stdout.String(), file+tt.line+" §"+section) {
+						t.Errorf("write=%t: stdout = %q、期待値 = %s行の §%sの指摘", write, stdout.String(), tt.line, section)
+					}
+				}
+				if !strings.Contains(stderr.String(), "違反2件") {
+					t.Errorf("write=%t: stderr = %q、期待値 = 本文の違反2件", write, stderr.String())
+				}
+				got, err := os.ReadFile(file) //#nosec G304
+				if err != nil {
+					t.Fatalf("読み戻し: %v", err)
+				}
+				if string(got) != tt.doc {
+					t.Errorf("write=%t: ファイル = %q、期待値 = %q", write, got, tt.doc)
+				}
+			}
+		})
 	}
 }

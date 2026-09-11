@@ -2,23 +2,15 @@ package comment
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
 
-// reMarker matches the Japanese translation marker. It is only needed by tests,
-// so it lives here rather than in the production code.
-//
-// [Ja] reMarker は日本語訳マーカーにマッチする。テストでのみ必要なため、本番コードでは
-// なくこちらに置く。
-var reMarker = regexp.MustCompile(`\[Ja\]`)
-
-// group builds a comment group from raw "//" lines, numbering them from 1.
-//
-// [Ja] group は "//" 行から 1 始まりで番号付けしたコメント群を作る。
+// groupは "//" 行から1始まりで番号付けしたコメント群を作る。
 func group(texts ...string) []commentLine {
 	lines := make([]commentLine, len(texts))
 	for i, t := range texts {
@@ -27,13 +19,11 @@ func group(texts ...string) []commentLine {
 	return lines
 }
 
-// condsOf returns the list of condition numbers in findings.
-//
-// [Ja] condsOf は findings に含まれる条件番号の一覧を返す。
-func condsOf(fs []finding) []int {
-	got := make([]int, len(fs))
+// sectionsOfはfindingsに含まれる節番号の一覧を返す。
+func sectionsOf(fs []finding) []string {
+	got := make([]string, len(fs))
 	for i, f := range fs {
-		got[i] = f.cond
+		got[i] = f.section
 	}
 	return got
 }
@@ -42,144 +32,49 @@ func TestCheckGroup(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		lines     []commentLine
-		wantConds []int
+		name         string
+		lines        []commentLine
+		wantSections []string
 	}{
 		{
-			name: "correct pair with a blank line between the blocks",
-			// One blank comment line separates the English and Japanese blocks.
-			//
-			// [Ja] 英語ブロックと日本語ブロックを空行 1 行で区切る。
-			lines:     group("// Hash the password.", "//", "// [Ja] パスワードをハッシュ化する。"),
-			wantConds: nil,
+			name:         "スタイルに従ったコメントは指摘しない",
+			lines:        group("// 平文パスワードをbcryptでハッシュ化する。"),
+			wantSections: nil,
 		},
 		{
-			name: "missing blank line between the blocks (8)",
-			// The [Ja] block directly follows the English line, with no blank.
-			//
-			// [Ja] [Ja] ブロックが英語行の直後に続き、空行が無い。
-			lines:     group("// Hash the password.", "// [Ja] パスワードをハッシュ化する。"),
-			wantConds: []int{8},
+			name:         "英数字と日本語の間のスペースを指摘する",
+			lines:        group("// 平文パスワードを bcrypt でハッシュ化する。"),
+			wantSections: []string{"3.2"},
 		},
 		{
-			name: "correct multi-line block with a blank line between the blocks",
-			// A blank line separates the multi-line English and Japanese blocks.
-			//
-			// [Ja] 複数行でも英日のブロックを空行で区切る。
-			lines:     group("// First line.", "// Second line.", "//", "// [Ja] 最初の行。", "// 2 行目。"),
-			wantConds: nil,
+			name:         "全角丸括弧を指摘する",
+			lines:        group("// ユーザーIDを取得（削除済みユーザーは0を返す）。"),
+			wantSections: []string{"3.1"},
 		},
 		{
-			name: "missing blank line in a multi-line block (8)",
-			// The [Ja] block directly follows the last English line, with no blank.
-			//
-			// [Ja] [Ja] ブロックが英語最終行の直後に続き、空行が無い。
-			lines:     group("// First line.", "// Second line.", "// [Ja] 最初の行。", "// 2 行目。"),
-			wantConds: []int{8},
+			name:         "複数行のうち違反した行だけを指摘する",
+			lines:        group("// 平文パスワードをハッシュ化する。", "//", "// cost は 10 を使う。"),
+			wantSections: []string{"3.2"},
 		},
 		{
-			name: "Japanese block is not Japanese (1)",
-			// The lines under the Japanese marker carry English text.
-			//
-			// [Ja] 日本語マーカーの下の行が英文になっている。
-			lines:     group("// Hash the password.", "//", "// [Ja] hash the password"),
-			wantConds: []int{1},
+			name:         "1行が両方の節に違反したら2件指摘する",
+			lines:        group("// フェーズ8-1（i18n キー命名規則）に対応する。"),
+			wantSections: []string{"3.1", "3.2"},
 		},
 		{
-			name: "English block contains Japanese, a duplicated Japanese block (2)",
-			// The unmarked English block is written in Japanese (the duplication misuse).
-			//
-			// [Ja] 無マーカーの英語ブロックが日本語で書かれている (重複の誤用)。
-			lines:     group("// 平文パスワードをハッシュ化する。", "//", "// [Ja] 平文パスワードをハッシュ化する。"),
-			wantConds: []int{2},
+			name:         "ブロックコメントの継続行も検査する",
+			lines:        group("/*", " * 最大 20 文字まで入力できる。", " */"),
+			wantSections: []string{"3.2"},
 		},
 		{
-			name: "Japanese on the line nearest the marker (2)",
-			// The line just above the marker is Japanese (the canonical misuse).
-			//
-			// [Ja] マーカーの直上の行が日本語になっている (典型的な誤用)。
-			lines:     group("// First line.", "// 二行目に日本語。", "//", "// [Ja] 最初の行。", "// 2 行目。"),
-			wantConds: []int{2},
+			name:         "インラインコードで囲んだ悪い例は指摘しない",
+			lines:        group("// 悪い例は `最大 20 文字` のようにスペースを入れたもの。"),
+			wantSections: nil,
 		},
 		{
-			name: "Japanese label line merged above an English block is not flagged",
-			// A missing blank line merges a Japanese label into the group, but only
-			// the line nearest the marker is the English side, so it is not flagged.
-			//
-			// [Ja] 空行漏れで日本語ラベルが群に取り込まれても、マーカーに最も近い行だけが
-			// 英語側なので誤検出しない。
-			lines:     group("// 設定する", "// Configure the client.", "//", "// [Ja] クライアントを設定する。"),
-			wantConds: nil,
-		},
-		{
-			name: "obsolete English marker (7)",
-			// A leading [En] marker is obsolete; the English block is unmarked now.
-			//
-			// [Ja] 行頭の [En] マーカーは廃止。英語ブロックは無マーカーにする。
-			lines:     group("// [En] Hash the password.", "//", "// [Ja] パスワードをハッシュ化する。"),
-			wantConds: []int{7},
-		},
-		{
-			name: "obsolete English marker with Japanese in the English block (2 then 7)",
-			// Both the obsolete marker and the Japanese-in-English misuse are reported.
-			//
-			// [Ja] 廃止マーカーと、英語ブロックの日本語混入の両方を報告する。
-			lines:     group("// [En] 平文パスワードをハッシュ化する。", "//", "// [Ja] 平文パスワードをハッシュ化する。"),
-			wantConds: []int{2, 7},
-		},
-		{
-			name: "two obsolete English markers (7 then 7)",
-			// Each [En] marker line is reported.
-			//
-			// [Ja] [En] マーカー行はそれぞれ報告される。
-			lines:     group("// [En] English one.", "// [En] English two.", "//", "// [Ja] 日本語。"),
-			wantConds: []int{7, 7},
-		},
-		{
-			name:      "Japanese-only comment with no English block (4)",
-			lines:     group("// [Ja] 日本語のみのコメント。"),
-			wantConds: []int{4},
-		},
-		{
-			name: "Japanese marker first, English text after it (4)",
-			// English after the Japanese marker does not count as an English block above it.
-			//
-			// [Ja] 日本語マーカーの後ろの英語は、上の英語ブロックとはみなさない。
-			lines:     group("// [Ja] 日本語。", "// English."),
-			wantConds: []int{4},
-		},
-		{
-			name: "inline marker with a duplicated Japanese block (3)",
-			// A duplicated Japanese block on one line, with the marker at end of line.
-			//
-			// [Ja] 1 行に日本語ブロックが重複し、マーカーが行末にある。
-			lines:     group("// 値はゼロのまま。[Ja] 値はゼロのまま。"),
-			wantConds: []int{3},
-		},
-		{
-			name: "inline marker with a reversed Japanese-then-English pair (3)",
-			// Japanese leads and English follows the end-of-line marker.
-			//
-			// [Ja] 日本語が先で、行末マーカーの後ろに英語が続く。
-			lines:     group("// ドキュメント宣言。[Ja] document declaration"),
-			wantConds: []int{3},
-		},
-		{
-			name: "inline marker with English before it is still banned (5)",
-			// A valid-looking old inline pair is banned under the current format.
-			//
-			// [Ja] 一見正しい旧インラインペアも現行フォーマットでは禁止。
-			lines:     group("// Hash the password. [Ja] パスワードをハッシュ化する。"),
-			wantConds: []int{5},
-		},
-		{
-			name: "duplicate Japanese marker (6)",
-			// Two Japanese markers in one comment.
-			//
-			// [Ja] 1 コメントに日本語マーカーが 2 つ。
-			lines:     group("// English.", "//", "// [Ja] 日本語。", "// [Ja] 二つ目の日本語。"),
-			wantConds: []int{6},
+			name:         "ツールへの指示は英数字だけなので指摘しない",
+			lines:        group("//go:generate stringer -type=Season"),
+			wantSections: nil,
 		},
 	}
 
@@ -187,9 +82,9 @@ func TestCheckGroup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := condsOf(checkGroup(tt.lines))
-			if !equalInts(got, tt.wantConds) {
-				t.Errorf("checkGroup conds = %v, want %v", got, tt.wantConds)
+			got := sectionsOf(checkGroup(tt.lines))
+			if !equalStrings(got, tt.wantSections) {
+				t.Errorf("checkGroupが検出した節番号 = %v、期待値 = %v", got, tt.wantSections)
 			}
 		})
 	}
@@ -199,112 +94,33 @@ func TestCheckGroupReportsLineNumber(t *testing.T) {
 	t.Parallel()
 
 	lines := []commentLine{
-		{line: 766, text: "// 値はゼロのまま。[Ja] 値はゼロのまま。"},
+		{line: 766, text: "// 最大 20 文字まで入力できる。"},
 	}
 	fs := checkGroup(lines)
 	if len(fs) != 1 {
-		t.Fatalf("got %d findings, want 1", len(fs))
+		t.Fatalf("違反数 = %d、期待値 = 1", len(fs))
 	}
 	if fs[0].line != 766 {
-		t.Errorf("finding line = %d, want 766", fs[0].line)
+		t.Errorf("違反の行番号 = %d、期待値 = 766", fs[0].line)
 	}
 }
 
-func TestMarkerKind(t *testing.T) {
+func TestCommentBody(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		text string
 		want string
 	}{
-		{"// [En] foo", "en"},
-		{"// [Ja] バー", "ja"},
-		{"//   [En] indented leader is trimmed", "en"},
-		{"\t* [En] block-comment continuation", "en"},
-		{"// foo", ""},
-		{"// The [En] mention is not at the start", ""},
-		{"// 値はゼロのまま。[Ja] 値はゼロのまま。", ""},
+		{"// 本文", "本文"},
+		{"//   字下げを保持する  ", "  字下げを保持する"},
+		{"/* ブロックコメントの先頭", "ブロックコメントの先頭"},
+		{"\t * 継続行", "継続行"},
+		{"// ", ""},
 	}
 	for _, tt := range tests {
-		if got := markerKind(tt.text); got != tt.want {
-			t.Errorf("markerKind(%q) = %q, want %q", tt.text, got, tt.want)
-		}
-	}
-}
-
-func TestInlineMarkerMisuse(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		text string
-		want bool
-	}{
-		// Misuse: a duplicated Japanese block on one line.
-		//
-		// [Ja] 誤用: 1 行に日本語ブロックが重複。
-		{"// 値はゼロのまま。[Ja] 値はゼロのまま。", true},
-		{"// CancelAt はゼロ値 (0) のまま. [Ja] CancelAt はゼロ値 (0) のまま", true},
-		// Misuse: reversed pair, Japanese leads and English follows the marker.
-		//
-		// [Ja] 誤用: 逆順ペア。日本語が先でマーカーの後ろに英語。
-		{"// ドキュメント宣言。[Ja] document declaration", true},
-		// English before the marker: no Japanese in the block before it.
-		//
-		// [Ja] マーカーの前が英語: 前のブロックに日本語が無い。
-		{"// Hash the password. [Ja] パスワードをハッシュ化する。", false},
-		{`// "ja" or "en". [Ja] "ja" または "en"`, false},
-		// Prose mention: the marker follows a particle, not a sentence end.
-		//
-		// [Ja] 地の文の言及: マーカーが助詞の後で文末ではない。
-		{"// 本文が [Ja] マーカーで始まる行だけを対象にする。", false},
-		// A line-leading marker is handled elsewhere, not here.
-		//
-		// [Ja] 行頭マーカーは別で扱うためここでは対象外。
-		{"// [Ja] 日本語のみ。", false},
-		{"// [En] English only.", false},
-		// No marker at all.
-		//
-		// [Ja] マーカーが無い。
-		{"// 値はゼロのまま。", false},
-	}
-	for _, tt := range tests {
-		if got := inlineMarkerMisuse(tt.text); got != tt.want {
-			t.Errorf("inlineMarkerMisuse(%q) = %v, want %v", tt.text, got, tt.want)
-		}
-	}
-}
-
-func TestInlineMarkerPresent(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		text string
-		want bool
-	}{
-		// An inline Japanese marker after a sentence end.
-		//
-		// [Ja] 文末の後にインライン日本語マーカー。
-		{"// Hash the password. [Ja] パスワードをハッシュ化する。", true},
-		{"// 値はゼロのまま。[Ja] 値はゼロのまま。", true},
-		// An inline English marker after a sentence end.
-		//
-		// [Ja] 文末の後にインライン英語マーカー。
-		{"// cache it. [En] cache the result", true},
-		// Prose mention: no sentence end before the marker.
-		//
-		// [Ja] 地の文の言及: マーカーの前に文末が無い。
-		{"// The [Ja] marker leads the Japanese block.", false},
-		{"// 本文が [Ja] マーカーで始まる。", false},
-		// Line-leading markers and lines without any marker.
-		//
-		// [Ja] 行頭マーカー、およびマーカーの無い行。
-		{"// proper English block line", false},
-		{"// [Ja] 行頭の日本語マーカー", false},
-		{"// no markers here at all", false},
-	}
-	for _, tt := range tests {
-		if got := inlineMarkerPresent(tt.text); got != tt.want {
-			t.Errorf("inlineMarkerPresent(%q) = %v, want %v", tt.text, got, tt.want)
+		if got := commentBody(tt.text); got != tt.want {
+			t.Errorf("commentBody(%q) = %q、期待値 = %q", tt.text, got, tt.want)
 		}
 	}
 }
@@ -312,69 +128,54 @@ func TestInlineMarkerPresent(t *testing.T) {
 func TestGoCommentGroupsIgnoresStringLiterals(t *testing.T) {
 	t.Parallel()
 
-	// The "[Ja]" below lives inside a string literal, so the parser must not
-	// surface it as a comment (otherwise the tool would flag its own fixtures).
-	//
-	// [Ja] 下の "[Ja]" は文字列リテラル内にあるため、コメントとして抽出されては
-	// ならない (さもないとツール自身のフィクスチャを誤検出する)。
+	// 下の文字列リテラルはコメントとして抽出されてはならない。
+	// さもないとツール自身のテストデータを誤検出する。
 	src := []byte(strings.Join([]string{
 		"package sample",
 		"",
-		"// Greet returns a greeting.",
-		"//",
-		"// [Ja] Greet は挨拶を返す。",
+		"// Greetは挨拶を返す。",
 		"func Greet() string {",
-		"\treturn \"// [Ja] this is not a comment\"",
+		"\treturn \"// 最大 20 文字\"",
 		"}",
 	}, "\n"))
 
 	groups, err := goCommentGroups("sample.go", src)
 	if err != nil {
-		t.Fatalf("goCommentGroups: %v", err)
+		t.Fatalf("goCommentGroupsに失敗した: %v", err)
 	}
 
-	var markerLines int
+	var lines int
 	for _, g := range groups {
-		for _, cl := range g {
-			if reMarker.MatchString(cl.text) {
-				markerLines++
-			}
-		}
+		lines += len(g)
 	}
-	if markerLines != 1 {
-		t.Errorf("found %d comment lines with the marker, want 1 (string literal must be ignored)", markerLines)
+	if lines != 1 {
+		t.Errorf("抽出したコメント行数 = %d、期待値 = 1 (文字列リテラルは無視する)", lines)
 	}
 }
 
 func TestTemplCommentGroups(t *testing.T) {
 	t.Parallel()
 
-	// Two runs of full-line "//" comments separated by a non-comment line must
-	// become two groups; trailing markup is not part of any group.
-	//
-	// [Ja] 行頭 "//" コメントの連続が非コメント行で区切られたら 2 群になり、
+	// 行頭 "//" コメントの連続が非コメント行で区切られたら2群になり、
 	// 末尾のマークアップはどの群にも含まれない。
 	src := []byte(strings.Join([]string{
-		"// First group.",
-		"//",
-		"// [Ja] 最初の群。",
+		"// 最初の群。",
+		"// 2行目。",
 		"templ Page() {",
 		"\t<div>hello</div>",
-		"// Second group.",
-		"//",
-		"// [Ja] 2 つ目の群。",
+		"// 2つ目の群。",
 		"}",
 	}, "\n"))
 
 	groups := templCommentGroups(src)
 	if len(groups) != 2 {
-		t.Fatalf("got %d groups, want 2", len(groups))
+		t.Fatalf("コメント群の数 = %d、期待値 = 2", len(groups))
 	}
 	if groups[0][0].line != 1 {
-		t.Errorf("first group starts at line %d, want 1", groups[0][0].line)
+		t.Errorf("最初の群の開始行 = %d、期待値 = 1", groups[0][0].line)
 	}
-	if groups[1][0].line != 6 {
-		t.Errorf("second group starts at line %d, want 6", groups[1][0].line)
+	if groups[1][0].line != 5 {
+		t.Errorf("2つ目の群の開始行 = %d、期待値 = 5", groups[1][0].line)
 	}
 }
 
@@ -387,40 +188,33 @@ func TestIsGenerated(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "standard generated header",
+			name: "定型の生成物ヘッダー",
 			src:  "// Code generated by protoc-gen-go. DO NOT EDIT.\npackage sample\n",
 			want: true,
 		},
 		{
-			name: "hand-written file",
-			src:  "// Greet returns a greeting.\npackage sample\n",
+			name: "手書きのファイル",
+			src:  "// Greetは挨拶を返す。\npackage sample\n",
 			want: false,
 		},
 	}
 	for _, tt := range tests {
 		if got := isGenerated([]byte(tt.src)); got != tt.want {
-			t.Errorf("%s: isGenerated = %v, want %v", tt.name, got, tt.want)
+			t.Errorf("%s: isGenerated = %v、期待値 = %v", tt.name, got, tt.want)
 		}
 	}
 }
 
-// TestRunFullMode exercises the subcommand end to end over a temp tree: full mode
-// reports a near-zero-false-positive condition (here a Japanese block that is not
-// Japanese), writes findings to stdout and a summary to stderr, and exits 1.
-//
-// [Ja] TestRunFullMode は一時ツリー上でサブコマンドを通しで動かす。全体モードは誤検出が
-// ほぼ無い条件 (ここでは日本語でない日本語ブロック) を報告し、検出を stdout・要約を
-// stderr に書き、終了コード 1 を返す。
-func TestRunFullMode(t *testing.T) {
+// TestRunReportsSpacingは一時ツリー上でサブコマンドを通しで動かし、§3.2の違反を
+// stdoutに報告し、要約をstderrに書き、終了コード1を返すことを確認する。
+func TestRunReportsSpacing(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	writeFile(t, dir, "bad.go", strings.Join([]string{
 		"package sample",
 		"",
-		"// valid english block.",
-		"//",
-		"// [Ja] this block is not japanese.",
+		"// 平文パスワードを bcrypt でハッシュ化する。",
 		"func Bad() {}",
 	}, "\n"))
 
@@ -428,31 +222,28 @@ func TestRunFullMode(t *testing.T) {
 	code := Run([]string{dir}, &stdout, &stderr)
 
 	if code != 1 {
-		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+		t.Fatalf("終了コード = %d、期待値 = 1、標準エラー = %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "bad.go:5:") {
-		t.Errorf("stdout = %q, want a finding at bad.go:5", stdout.String())
+	if !strings.Contains(stdout.String(), "bad.go:3:") {
+		t.Errorf("標準出力 = %q、bad.go:3の違反を期待", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "1 bilingual marker violation") {
-		t.Errorf("stderr = %q, want a violation summary", stderr.String())
+	if !strings.Contains(stdout.String(), "§3.2") {
+		t.Errorf("標準出力 = %q、節番号を含むことを期待", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "日本語スタイル違反1件") {
+		t.Errorf("標準エラー = %q、違反の要約を含むことを期待", stderr.String())
 	}
 }
 
-// TestRunFullModeEnglishBlockJapanese confirms full mode reports an English block
-// that contains Japanese (the duplication misuse), tree-wide.
-//
-// [Ja] TestRunFullModeEnglishBlockJapanese は、英語ブロックに日本語が入っている誤用
-// (重複) を全体モードがツリー全体で報告することを確認する。
-func TestRunFullModeEnglishBlockJapanese(t *testing.T) {
+// TestRunReportsFullWidthParenは §3.1の違反をツリー全体で報告することを確認する。
+func TestRunReportsFullWidthParen(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	writeFile(t, dir, "bad.go", strings.Join([]string{
 		"package sample",
 		"",
-		"// 平文パスワードをハッシュ化する。",
-		"//",
-		"// [Ja] 平文パスワードをハッシュ化する。",
+		"// ユーザーIDを取得（削除済みユーザーは0を返す）。",
 		"func Bad() {}",
 	}, "\n"))
 
@@ -460,76 +251,42 @@ func TestRunFullModeEnglishBlockJapanese(t *testing.T) {
 	code := Run([]string{dir}, &stdout, &stderr)
 
 	if code != 1 {
-		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+		t.Fatalf("終了コード = %d、期待値 = 1、標準エラー = %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "bad.go:3:") {
-		t.Errorf("stdout = %q, want a finding at bad.go:3", stdout.String())
+		t.Errorf("標準出力 = %q、bad.go:3の違反を期待", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "§3.1") {
+		t.Errorf("標準出力 = %q、節番号を含むことを期待", stdout.String())
 	}
 }
 
-// TestRunFullModeObsoleteEnglishMarker confirms full mode reports an obsolete
-// English marker, tree-wide.
-//
-// [Ja] TestRunFullModeObsoleteEnglishMarker は、廃止された英語マーカーを全体モードが
-// ツリー全体で報告することを確認する。
-func TestRunFullModeObsoleteEnglishMarker(t *testing.T) {
+// TestRunChecksTemplFilesは .templファイルのコメントも検査対象になることを確認する。
+func TestRunChecksTemplFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	writeFile(t, dir, "bad.go", strings.Join([]string{
-		"package sample",
+	writeFile(t, dir, "page.templ", strings.Join([]string{
+		"package templates",
 		"",
-		"// [En] Greet returns a greeting.",
-		"//",
-		"// [Ja] Greet は挨拶を返す。",
-		"func Greet() string { return \"hi\" }",
+		"// Page は 1 ページ分のマークアップを返す。",
+		"templ Page() {",
+		"\t<div>hello</div>",
+		"}",
 	}, "\n"))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{dir}, &stdout, &stderr)
 
 	if code != 1 {
-		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
+		t.Fatalf("終了コード = %d、期待値 = 1、標準エラー = %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "bad.go:3:") {
-		t.Errorf("stdout = %q, want a finding at bad.go:3", stdout.String())
-	}
-}
-
-// TestRunFullModeInlineMarker confirms full mode reports an inline Japanese
-// marker with Japanese before it, tree-wide.
-//
-// [Ja] TestRunFullModeInlineMarker は、前に日本語があるインライン日本語マーカーを全体
-// モードがツリー全体で報告することを確認する。
-func TestRunFullModeInlineMarker(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	writeFile(t, dir, "bad.go", strings.Join([]string{
-		"package sample",
-		"",
-		"// 値はゼロのまま。[Ja] 値はゼロのまま。",
-		"func Bad() {}",
-	}, "\n"))
-
-	var stdout, stderr bytes.Buffer
-	code := Run([]string{dir}, &stdout, &stderr)
-
-	if code != 1 {
-		t.Fatalf("Run code = %d, want 1 (stderr: %s)", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "bad.go:3:") {
-		t.Errorf("stdout = %q, want a finding at bad.go:3", stdout.String())
+	if !strings.Contains(stdout.String(), "page.templ:3:") {
+		t.Errorf("標準出力 = %q、page.templ:3の違反を期待", stdout.String())
 	}
 }
 
-// TestRunNoViolations confirms a clean tree exits 0 with no output. The
-// English-required, inline-ban, duplicate, and blank-separator rules are diff-mode
-// only, so none of them must trip in full mode.
-//
-// [Ja] TestRunNoViolations は問題のないツリーが無出力・終了コード 0 になることを確認する。
-// 英語必須・インライン禁止・重複・ブロック間空行の規則は差分モード限定のため、全体モードでは
-// 発火してはならない。
+// TestRunNoViolationsは問題のないツリーが無出力・終了コード0になることを確認する。
 func TestRunNoViolations(t *testing.T) {
 	t.Parallel()
 
@@ -537,16 +294,12 @@ func TestRunNoViolations(t *testing.T) {
 	writeFile(t, dir, "good.go", strings.Join([]string{
 		"package sample",
 		"",
-		"// Greet returns a greeting.",
-		"//",
-		"// [Ja] Greet は挨拶を返す。",
+		"// Greetは挨拶を返す。",
+		"// 最大20文字まで返す (それ以上は切り詰める)。",
 		"func Greet() string { return \"hi\" }",
 		"",
-		"// Wave waves at the user.",
-		"// It never returns an error.",
-		"//",
-		"// [Ja] Wave はユーザーに手を振る。",
-		"// エラーは返さない。",
+		"// Waveはユーザーに手を振る。",
+		"// 詳細は https://example.com/wave を参照する。",
 		"func Wave() {}",
 	}, "\n"))
 
@@ -554,18 +307,15 @@ func TestRunNoViolations(t *testing.T) {
 	code := Run([]string{dir}, &stdout, &stderr)
 
 	if code != 0 {
-		t.Fatalf("Run code = %d, want 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+		t.Fatalf("終了コード = %d、期待値 = 0、標準出力 = %s、標準エラー = %s", code, stdout.String(), stderr.String())
 	}
 	if stdout.String() != "" {
-		t.Errorf("stdout = %q, want empty", stdout.String())
+		t.Errorf("標準出力 = %q、空を期待", stdout.String())
 	}
 }
 
-// TestRunSkipsGeneratedFiles confirms generated files are not checked even when
-// they contain a marker misuse.
-//
-// [Ja] TestRunSkipsGeneratedFiles は、生成物がマーカー誤用を含んでいても検査対象外に
-// なることを確認する。
+// TestRunSkipsGeneratedFilesは、生成物が違反を含んでいても検査対象外になることを
+// 確認する。
 func TestRunSkipsGeneratedFiles(t *testing.T) {
 	t.Parallel()
 
@@ -574,9 +324,7 @@ func TestRunSkipsGeneratedFiles(t *testing.T) {
 		"// Code generated by stringer. DO NOT EDIT.",
 		"package sample",
 		"",
-		"// 日本語が英語ブロックに入っている。",
-		"//",
-		"// [Ja] 日本語。",
+		"// 最大 20 文字まで入力できる。",
 		"func Gen() {}",
 	}, "\n"))
 
@@ -584,33 +332,29 @@ func TestRunSkipsGeneratedFiles(t *testing.T) {
 	code := Run([]string{dir}, &stdout, &stderr)
 
 	if code != 0 {
-		t.Fatalf("Run code = %d, want 0 (generated files are skipped); stdout: %s", code, stdout.String())
+		t.Fatalf("終了コード = %d、期待値 = 0 (生成物はスキップする)、標準出力 = %s", code, stdout.String())
 	}
 }
 
-// TestRunHelpExitsZero confirms a -h request is treated as success.
-//
-// [Ja] TestRunHelpExitsZero は -h 要求が成功扱いになることを確認する。
+// TestRunHelpExitsZeroは -h要求が成功扱いになることを確認する。
 func TestRunHelpExitsZero(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"-h"}, &stdout, &stderr); code != 0 {
-		t.Errorf("Run(-h) code = %d, want 0", code)
+		t.Errorf("Run(-h) の終了コード = %d、期待値 = 0", code)
 	}
 }
 
-// writeFile writes content to name under dir, failing the test on error.
-//
-// [Ja] writeFile は dir 配下の name に content を書き出し、失敗時にテストを止める。
+// writeFileはdir配下のnameにcontentを書き出し、失敗時にテストを止める。
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
-		t.Fatalf("write %s: %v", name, err)
+		t.Fatalf("%sの書き込みに失敗した: %v", name, err)
 	}
 }
 
-func equalInts(a, b []int) bool {
+func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -620,4 +364,160 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func TestRunExcludesCodeAndDirectives(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		comments []string
+	}{
+		{name: "タブでインデントしたコード", comments: []string{"// コード例。", "//", "//\tfmt.Println(\"最大 20 文字（例）\")"}},
+		{name: "スペースでインデントしたコード", comments: []string{"// コード例。", "//", "//     fmt.Println(\"最大 20 文字（例）\")"}},
+		{name: "バッククォートのフェンス", comments: []string{"// ```go", "// fmt.Println(\"最大 20 文字（例）\")", "// ```"}},
+		{name: "チルダのフェンス", comments: []string{"// ~~~go", "// fmt.Println(\"最大 20 文字（例）\")", "// ~~~~"}},
+		{name: "短いフェンスでは閉じない", comments: []string{"// ````go", "// ```", "// 最大 20 文字（例）", "// ~~~~", "// 最大 20 文字（例）", "// ````"}},
+		{name: "末尾に本文があるフェンスでは閉じない", comments: []string{"// ```go", "// ``` 最大 20 文字（例）", "// 最大 20 文字（例）", "// ```"}},
+		{name: "星付きブロックコメント", comments: []string{"/*", " * コード例。", " *", " *\tfmt.Println(\"最大 20 文字（例）\")", " */"}},
+		{name: "ブロックコメントの共通インデント", comments: []string{"/*", "\tコード例。", "", "\t\tfmt.Println(\"最大 20 文字（例）\")", "*/"}},
+		{name: "箇条書きが字下げのない行で終わればコード例に戻る", comments: []string{"// 項目。", "//", "//   - 項目1。", "//", "// 通常の段落。", "//", "//\tfmt.Println(\"最大 20 文字（例）\")"}},
+		{name: "日本語引数の生成指示", comments: []string{"//go:generate echo 最大 20 文字（例）"}},
+		{name: "リンタへの指示", comments: []string{"//nolint:unused // 最大 20 文字（例）", "//lint:ignore U1000 最大 20 文字（例）", "//nolint // 最大 20 文字（例）"}},
+	}
+	for _, tt := range tests {
+		for _, ext := range []string{".go", ".templ"} {
+			if ext == ".templ" && strings.HasPrefix(tt.comments[0], "/*") {
+				continue
+			}
+			t.Run(tt.name+ext, func(t *testing.T) {
+				t.Parallel()
+				dir := t.TempDir()
+				before := "// 前は最大 20 文字（例）"
+				after := "// 後は最大 20 文字（例）"
+				lines := append([]string{"package sample", before}, tt.comments...)
+				lines = append(lines, after)
+				writeFile(t, dir, "sample"+ext, strings.Join(lines, "\n"))
+				var stdout, stderr bytes.Buffer
+				if code := Run([]string{dir}, &stdout, &stderr); code != 1 {
+					t.Fatalf("終了コード = %d、期待値 = 1、標準エラー = %s", code, stderr.String())
+				}
+				path := filepath.Join(dir, "sample"+ext)
+				want := []string{
+					fmt.Sprintf("%s:2: §3.1", path), fmt.Sprintf("%s:2: §3.2", path),
+					fmt.Sprintf("%s:%d: §3.1", path, len(lines)), fmt.Sprintf("%s:%d: §3.2", path, len(lines)),
+				}
+				got := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+				if len(got) != len(want) {
+					t.Fatalf("報告行数 = %d、期待値 = %d\n%s", len(got), len(want), stdout.String())
+				}
+				for i := range want {
+					if !strings.HasPrefix(got[i], want[i]) {
+						t.Errorf("報告 = %q、期待する接頭辞 = %q", got[i], want[i])
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCheckGroupKeepsProse(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		lines    []commentLine
+		wantLine int
+	}{
+		{name: "ブロック本文の共通インデントはコードとみなさない", lines: group("/*", "\t最大 20 文字（例）", "*/"), wantLine: 2},
+		{name: "空白付きの指示名は地の文", lines: group("// go:generateは最大 20 文字（例）"), wantLine: 1},
+		{name: "nolintで始まる別の単語は地の文", lines: group("//nolinter 最大 20 文字（例）"), wantLine: 1},
+		{name: "字下げされた箇条書きは地の文", lines: group("// 項目。", "//", "//   - 最大 20 文字（例）"), wantLine: 3},
+		{name: "箇条書きの折り返しは地の文", lines: group("// 項目。", "//", "//   1. 説明。", "//      最大 20 文字（例）"), wantLine: 4},
+		{name: "空行を挟んだ箇条書きの2段落目は地の文", lines: group("// 項目。", "//", "//   - 項目1。", "//", "//     最大 20 文字（例）"), wantLine: 5},
+		{name: "箇条書きの中はタブ字下げでも地の文", lines: group("// 項目。", "//", "//   - 項目1。", "//", "//\t最大 20 文字（例）"), wantLine: 5},
+		{name: "フェンスを含むインラインコードは後ろを隠さない", lines: group("// ```正常```", "// 最大 20 文字（例）"), wantLine: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := checkGroup(tt.lines)
+			if len(got) != 2 {
+				t.Fatalf("違反数 = %d、期待値 = 2", len(got))
+			}
+			for _, f := range got {
+				if f.line != tt.wantLine {
+					t.Errorf("行番号 = %d、期待値 = %d", f.line, tt.wantLine)
+				}
+			}
+		})
+	}
+}
+
+func TestRunFenceDoesNotLeakBetweenGroups(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "sample.go", strings.Join([]string{
+		"package sample", "// ```go", "// 最大 20 文字（例）", "func Example() {}",
+		"// 最大 20 文字（例）", "func After() {}",
+	}, "\n"))
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{dir}, &stdout, &stderr); code != 1 {
+		t.Fatalf("終了コード = %d、期待値 = 1", code)
+	}
+	if strings.Count(stdout.String(), "sample.go:5:") != 2 || strings.Count(stdout.String(), "\n") != 2 {
+		t.Errorf("次のコメント群の2件だけを期待したが、出力は %q", stdout.String())
+	}
+}
+
+// TestRunDiffModeLimitsToAddedLinesは -base=<ref> が <ref> 以降に追加された行だけを
+// 報告することを、一時的なGitリポジトリで確認する。
+// 既存行の違反は残したまま新しい違反を足し、追加行だけが報告される形にしている。
+func TestRunDiffModeLimitsToAddedLines(t *testing.T) {
+	// addedLinesは作業ディレクトリのGitリポジトリを見るため、t.Chdirで一時リポジトリへ移る。
+	// t.Chdirはプロセス全体に効くため、このテストはt.Parallelを使えない。
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("gitが無いため差分モードを検査できない")
+	}
+
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		// argsはこのテストが渡すリテラルだけで、外部入力は混ざらない。
+		// gosecのコマンド混入警告 (G204) はここでは当てはまらない。
+		cmd := exec.Command("git", args...) //#nosec G204
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %sに失敗した: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	git("init", "-q", "-b", "main")
+	writeFile(t, dir, "sample.go", strings.Join([]string{
+		"package sample", "", "// 既存の 最大 20 文字。", "func A() {}",
+	}, "\n"))
+	git("add", "-A")
+	git("commit", "-qm", "base")
+
+	writeFile(t, dir, "sample.go", strings.Join([]string{
+		"package sample", "", "// 既存の 最大 20 文字。", "func A() {}", "",
+		"// 追加の 最大 20 文字。", "func B() {}",
+	}, "\n"))
+	git("add", "-A")
+	git("commit", "-qm", "next")
+
+	t.Chdir(dir)
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"-base=HEAD~1", "."}, &stdout, &stderr); code != 1 {
+		t.Fatalf("終了コード = %d、期待値 = 1、標準エラー = %s", code, stderr.String())
+	}
+	got := strings.TrimSpace(stdout.String())
+	if strings.Count(got, "\n") != 0 || !strings.Contains(got, "sample.go:6:") {
+		t.Errorf("標準出力 = %q、追加行 sample.go:6 の1件だけを期待", got)
+	}
 }

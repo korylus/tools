@@ -8,10 +8,8 @@ on:
 
 env:
   GO_VERSION: "1.26.3"
-  # Pin golangci-lint to the version Groobb uses, so local and CI lint with the
-  # same rules.
-  # [Ja] golangci-lint を Groobb と同じバージョンに固定し、ローカルと CI が同じ
-  # ルールで lint するようにする。
+  # golangci-lintをGroobbと同じバージョンに固定し、ローカルとCIが同じルールで
+  # lintするようにする。
   GOLANGCI_LINT_VERSION: "v2.7.2"
 
 jobs:
@@ -63,14 +61,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # Build golangci-lint from source with the CI Go toolchain instead of the
-      # prebuilt binary. golangci-lint refuses to analyze a module whose go
-      # directive targets a newer Go than the one it was built with, and the
-      # published binaries lag behind go 1.26.
-      #
-      # [Ja] golangci-lint を配布バイナリではなく CI の Go ツールチェーンでソースから
-      # ビルドする。golangci-lint は自身のビルドに使われた Go より新しい go ディレク
-      # ティブを持つ module の解析を拒否し、配布バイナリは go 1.26 への追従が遅れるため。
+      # golangci-lintを配布バイナリではなくCIのGoツールチェーンでソースからビルドする。
+      # golangci-lintは自身のビルドに使われたGoより新しいgoディレクティブを持つ
+      # moduleの解析を拒否し、配布バイナリはgo 1.26への追従が遅れるため。
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
 
