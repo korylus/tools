@@ -7,7 +7,7 @@
 //     禁じる (korylus-lang.md §3。ルール本体はinternal/styleが持つ)
 //
 // 句点改行は地の文だけを対象にするが、§3のスタイルは見出し・箇条書き・表・引用
-// にも適用する。
+// とYAMLフロントマターの値にも適用する。
 //
 // モードは3つ。
 //
@@ -72,6 +72,7 @@ type docLine struct {
 	text string
 	// proseはtextが地の文かどうか。句点改行は地の文だけを対象にする。
 	// styleに空白しか残らない行は、コメントやコードの内側なので地の文に数えない。
+	// YAMLフロントマターの行もMarkdownの本文ではないため地の文に数えない。
 	prose bool
 	// styleは §3スタイルと句点改行の区切り位置を判定するテキスト。
 	// ASTで特定したコード本文とHTMLコメントを半角スペースに置き換える。
@@ -324,6 +325,8 @@ func breakProse(line, masked string) string {
 
 // isProseはlineが句点改行の検査対象となる地の文かを返す。
 // 見出し・箇条書き・表・引用・空行は地の文ではない。
+// YAMLフロントマターは1行だけでは判定できないため、eachLineが文書全体を見て
+// 除外する。
 func isProse(line string) bool {
 	switch {
 	case strings.TrimSpace(line) == "",
