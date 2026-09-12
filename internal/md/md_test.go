@@ -952,3 +952,41 @@ func TestRunEmphasisSentenceBreaks(t *testing.T) {
 		})
 	}
 }
+
+// TestRewriteKeepsCRLFはCRLFの文書を書き換えても改行コードが混ざらないことを
+// 確認する。
+// 分割で挿入する改行がLF固定だと、1つの文書にCRLFとLFが混在してしまう。
+func TestRewriteKeepsCRLF(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "地の文の分割",
+			in:   "本文です。2つ目の文です。\r\n",
+			want: "本文です。\r\n2つ目の文です。\r\n",
+		},
+		{
+			name: "フロントマターを持つ文書",
+			in:   "---\r\ndescription: サンプルです。2つ目の文です。\r\n---\r\n\r\n本文です。2つ目の文です。\r\n",
+			want: "---\r\ndescription: サンプルです。2つ目の文です。\r\n---\r\n\r\n本文です。\r\n2つ目の文です。\r\n",
+		},
+		{
+			name: "LFの文書はLFのまま",
+			in:   "本文です。2つ目の文です。\n",
+			want: "本文です。\n2つ目の文です。\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := rewrite(tt.in); got != tt.want {
+				t.Errorf("rewrite() =\n%q\n期待値\n%q", got, tt.want)
+			}
+		})
+	}
+}

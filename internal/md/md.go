@@ -284,7 +284,9 @@ func resolveScope(paths []string, all bool, base string) map[string]map[int]bool
 }
 
 // breakProseは地の文の1行を、トップレベル (括弧・角括弧・鉤括弧の外) にある
-// 文末の「。」で分割し、各区切りに "\n" を挿入した行を返す。
+// 文末の「。」で分割し、各区切りに改行を挿入した行を返す。
+// 挿入する改行は元の行の改行コードに合わせ、CRLFの文書でLFが混ざらないように
+// する。
 // 「。」の後ろが空白のみ、次の非空白文字が閉じ括弧・閉じ鉤括弧のとき、または
 // 「。」の直後が閉じの強調記号 (`**` / `_`) のときは区切らない。
 //
@@ -326,7 +328,16 @@ func breakProse(dl docLine) string {
 	if buf.Len() > 0 {
 		out = append(out, buf.String())
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(out, lineBreakOf(dl.text))
+}
+
+// lineBreakOfはlineの末尾の改行コードに合わせた区切りを返す。
+// eachLineはLFで分割するため、CRLFの行には末尾にCRが残っている。
+func lineBreakOf(line string) string {
+	if strings.HasSuffix(line, "\r") {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 // isProseはlineが句点改行の検査対象となる地の文かを返す。
