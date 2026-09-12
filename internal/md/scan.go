@@ -15,6 +15,8 @@ import (
 // HTMLコメントはインラインコードと区別して除外し、元の行番号を維持する。
 // インラインコードとHTMLコメントの範囲はdocLine.styleで半角スペースに置き換え、
 // 句点改行と §3の検査がどちらもこの範囲を避けられるようにする。
+// 強調の閉じ記号の位置はdocLine.emphasisClosersに集め、句点改行が開きの記号と
+// 区別できるようにする。
 // YAMLフロントマターはMarkdownの地の文ではないため、句点改行の対象から外す。
 // パーサーはフロントマターを知らず、区切りの `---` に挟まれた行を見出しや段落と
 // して扱うため、行の範囲は文書の先頭から自前で求める。
@@ -32,6 +34,7 @@ func eachLine(document string, onLine func(dl docLine)) {
 	}
 	included := make([]bool, len(lines))
 	masked := make([]bool, len(source))
+	emphasisClosers := map[int]bool{}
 	include := func(segment text.Segment) {
 		if segment.Start >= segment.Stop {
 			return
@@ -99,6 +102,16 @@ func eachLine(document string, onLine func(dl docLine)) {
 				start = end
 			}
 			return
+		case *ast.Emphasis:
+			// 閉じ記号の直前が本文なら、その末尾の位置を記録する。
+			// リンクやコードで終わる場合は閉じ記号が「。」に隣接しない。
+			// 入れ子の強調は子ノードの走査で扱うため、ここでは直接の子だけを見る。
+			if last, ok := n.LastChild().(*ast.Text); ok {
+				stop := last.Segment.Stop
+				if stop < len(source) && (source[stop] == '*' || source[stop] == '_') {
+					emphasisClosers[stop] = true
+				}
+			}
 		case *ast.CodeSpan:
 			// インラインコードは §3の対象外。
 			// 段落内で改行をまたぐコード片もASTの範囲で除外する。
@@ -135,13 +148,29 @@ func eachLine(document string, onLine func(dl docLine)) {
 			continue
 		}
 		style := maskLine(starts[i], line)
+		// ASTのバイト位置を、breakProseが使う行内のルーン位置へ変換する。
+		// 強調が1つも無いドキュメントでは変換するものが無いため、走査ごと省く。
+		var closers map[int]bool
+		if len(emphasisClosers) > 0 {
+			runeIndex := 0
+			for byteOffset := range line {
+				if emphasisClosers[starts[i]+byteOffset] {
+					if closers == nil {
+						closers = map[int]bool{}
+					}
+					closers[runeIndex] = true
+				}
+				runeIndex++
+			}
+		}
 		onLine(docLine{
 			lineNo: i + 1,
 			text:   line,
 			// マスクだけが残る行はコメントやコードの内側なので地の文に数えない。
 			// フロントマターが無ければfrontMatterEndは-1のため、全行が対象に残る。
-			prose: i > frontMatterEnd && isProse(line) && strings.TrimSpace(style) != "",
-			style: style,
+			prose:           i > frontMatterEnd && isProse(line) && strings.TrimSpace(style) != "",
+			style:           style,
+			emphasisClosers: closers,
 		})
 	}
 }

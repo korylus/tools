@@ -78,6 +78,9 @@ type docLine struct {
 	// ASTで特定したコード本文とHTMLコメントを半角スペースに置き換える。
 	// textとルーン数が揃うため、位置をtextへそのまま対応づけられる。
 	style string
+	// emphasisClosersはASTで強調の閉じと確認した記号の位置 (0始まりのルーン数)。
+	// 後続文字だけでは開きと閉じを区別できないため、構文解析の結果を使う。
+	emphasisClosers map[int]bool
 }
 
 // hitは検出した違反1件。
@@ -282,19 +285,18 @@ func resolveScope(paths []string, all bool, base string) map[string]map[int]bool
 
 // breakProseは地の文の1行を、トップレベル (括弧・角括弧・鉤括弧の外) にある
 // 文末の「。」で分割し、各区切りに "\n" を挿入した行を返す。
-// 「。」の後ろが空白のみ、または次の非空白文字が閉じ括弧・閉じ鉤括弧のときは
-// 区切らない。
+// 「。」の後ろが空白のみ、次の非空白文字が閉じ括弧・閉じ鉤括弧のとき、または
+// 「。」の直後が閉じの強調記号 (`**` / `_`) のときは区切らない。
 //
-// maskedはlineと同じルーン数を持ち、インラインコードとHTMLコメントの範囲が
-// 半角スペースに置き換わったもの (docLine.style)。
-// 区切り位置の判定はmaskedで行い、出力はlineから組み立てる。
-// これにより、改行をまたぐコード片やコメントの中の「。」で区切らずに済む。
-func breakProse(line, masked string) string {
+// 区切り位置の判定はdl.styleで行い、出力はdl.textから組み立てる。
+// dl.styleではコード片とコメントがマスクされているため、その中の「。」を避けられる。
+// dl.emphasisClosersで、実際に対応する開きがある閉じ記号だけを保護する。
+func breakProse(dl docLine) string {
 	var out []string
 	var buf strings.Builder
 	depth := 0
-	runes := []rune(line)
-	maskedRunes := []rune(masked)
+	runes := []rune(dl.text)
+	maskedRunes := []rune(dl.style)
 	for i, c := range runes {
 		buf.WriteRune(c)
 		switch m := maskedRunes[i]; {
@@ -305,11 +307,15 @@ func breakProse(line, masked string) string {
 				depth--
 			}
 		case m == '。' && depth == 0:
-			rest := string(maskedRunes[i+1:])
-			if strings.TrimSpace(rest) == "" {
+			rest := maskedRunes[i+1:]
+			if strings.TrimSpace(string(rest)) == "" {
 				continue
 			}
-			trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace)
+			// 閉じの強調記号は「。」との間に空白を置けないため、空白を落とす前に見る。
+			if dl.emphasisClosers[i+1] {
+				continue
+			}
+			trimmed := strings.TrimLeftFunc(string(rest), unicode.IsSpace)
 			if isClose(firstRune(trimmed)) {
 				continue
 			}
@@ -364,7 +370,7 @@ func rewriteWithOrigins(text string) (string, []int) {
 	lines := strings.Split(text, "\n")
 	replaced := map[int]string{}
 	eachProseLine(text, func(dl docLine) {
-		replaced[dl.lineNo] = breakProse(dl.text, dl.style)
+		replaced[dl.lineNo] = breakProse(dl)
 	})
 
 	out := make([]string, 0, len(lines))
@@ -386,7 +392,7 @@ func rewriteWithOrigins(text string) (string, []int) {
 func violations(text string) []hit {
 	var hits []hit
 	eachLine(text, func(dl docLine) {
-		if dl.prose && breakProse(dl.text, dl.style) != dl.text {
+		if dl.prose && breakProse(dl) != dl.text {
 			hits = append(hits, hit{lineNo: dl.lineNo, line: dl.text, msg: msgSentence, fixable: true})
 		}
 		for _, v := range style.CheckMaskedLine(dl.style) {

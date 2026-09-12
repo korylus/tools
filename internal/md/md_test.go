@@ -27,17 +27,16 @@ func linesOf(hits []hit) []int {
 	return got
 }
 
-// maskedLineOfはlineを1行だけのドキュメントとして走査し、breakProseへ渡す
-// マスク済みの行を返す。
-// マスクの組み立てはeachLineの責務なので、テストで手書きせずに実物を使う。
-func maskedLineOf(t *testing.T, line string) string {
+// proseLineOfはlineを1行だけのドキュメントとして走査し、breakProseへ渡す行を返す。
+// マスクと強調の位置はeachLineの責務なので、テストで手書きせずに実物を使う。
+func proseLineOf(t *testing.T, line string) docLine {
 	t.Helper()
 
-	var masked string
+	var result docLine
 	eachLine(line+"\n", func(dl docLine) {
-		masked = dl.style
+		result = dl
 	})
-	return masked
+	return result
 }
 
 func TestBreakProse(t *testing.T) {
@@ -93,13 +92,78 @@ func TestBreakProse(t *testing.T) {
 			in:   "This line has no Japanese period.",
 			want: "This line has no Japanese period.",
 		},
+		{
+			name: "行全体を包む太字の閉じ記号の前では改行しない",
+			in:   "**Korylusの開発言語は日本語です。**",
+			want: "**Korylusの開発言語は日本語です。**",
+		},
+		{
+			name: "太字の閉じ記号の後ろに地の文が続いても改行しない",
+			in:   "**太字です。** 続き。",
+			want: "**太字です。** 続き。",
+		},
+		{
+			name: "アンダースコアの閉じ記号の前でも改行しない",
+			in:   "_強調です。_",
+			want: "_強調です。_",
+		},
+		{
+			name: "「。」の直後の強調記号が開きなら改行する",
+			in:   "これは一文目です。**二文目**です。",
+			want: "これは一文目です。\n**二文目**です。",
+		},
+		{
+			name: "「。」と強調記号の間に空白があれば開きとみなして改行する",
+			in:   "これは一文目です。 **二文目**です。",
+			want: "これは一文目です。\n **二文目**です。",
+		},
+		{
+			name: "太字の直後に斜体が続いても閉じ記号の前では改行しない",
+			in:   "**太字です。**_斜体です_",
+			want: "**太字です。**_斜体です_",
+		},
+		{
+			name: "斜体の直後に太字が続いても閉じ記号の前では改行しない",
+			in:   "_斜体です。_**太字です**",
+			want: "_斜体です。_**太字です**",
+		},
+		{
+			name: "約物から始まる太字の前では改行する",
+			in:   "一文目です。**「二文目」です**。",
+			want: "一文目です。\n**「二文目」です**。",
+		},
+		{
+			name: "約物から始まる斜体の前では改行する",
+			in:   "一文目です。_「二文目」です_。",
+			want: "一文目です。\n_「二文目」です_。",
+		},
+		{
+			name: "入れ子の強調の閉じ記号の前では改行しない",
+			in:   "***太字と斜体です。***",
+			want: "***太字と斜体です。***",
+		},
+		{
+			name: "異なる記号で入れ子にした強調の閉じ記号を保護する",
+			in:   "**_太字と斜体です。_**",
+			want: "**_太字と斜体です。_**",
+		},
+		{
+			name: "開きがない記号の前では改行する",
+			in:   "一文目です。** 続き。",
+			want: "一文目です。\n** 続き。",
+		},
+		{
+			name: "太字の中にコードとリンクがあっても閉じ記号を保護する",
+			in:   "**`コード`と[リンク](https://example.com)の説明です。**",
+			want: "**`コード`と[リンク](https://example.com)の説明です。**",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := breakProse(tt.in, maskedLineOf(t, tt.in)); got != tt.want {
+			if got := breakProse(proseLineOf(t, tt.in)); got != tt.want {
 				t.Errorf("breakProse(%q) = %q、期待値 = %q", tt.in, got, tt.want)
 			}
 		})
@@ -829,6 +893,61 @@ func TestRunReportsProseBetweenCodeSpans(t *testing.T) {
 				if string(got) != tt.doc {
 					t.Errorf("write=%t: ファイル = %q、期待値 = %q", write, got, tt.doc)
 				}
+			}
+		})
+	}
+}
+
+// TestRunEmphasisSentenceBreaksは検査と修正の両方で強調の開閉を区別し、
+// 開きの直前だけを分割することを確認する。行をまたぐ強調も文書全体で判定する。
+func TestRunEmphasisSentenceBreaks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"太字の直後の斜体", "**太字です。**_斜体です_\n", "**太字です。**_斜体です_\n"},
+		{"斜体の直後の太字", "_斜体です。_**太字です**\n", "_斜体です。_**太字です**\n"},
+		{"約物から始まる太字", "一文目です。**「二文目」です**。\n", "一文目です。\n**「二文目」です**。\n"},
+		{"約物から始まる斜体", "一文目です。_「二文目」です_。\n", "一文目です。\n_「二文目」です_。\n"},
+		{"行をまたぐ太字", "**太字の始まり\n続きです。**_斜体です_\n", "**太字の始まり\n続きです。**_斜体です_\n"},
+		{"異なる記号での入れ子", "**_太字と斜体です。_**\n", "**_太字と斜体です。_**\n"},
+		{"コード内の記号を開きにしない", "`**` 一文目です。** 続き。\n", "`**` 一文目です。\n** 続き。\n"},
+		{"リンク内外の強調を混同しない", "[**リンク**](https://example.com) 一文目です。**「二文目」です**。\n", "[**リンク**](https://example.com) 一文目です。\n**「二文目」です**。\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "doc.md")
+			writeFile(t, path, tt.in)
+			var stdout, stderr bytes.Buffer
+			wantCode := 0
+			if tt.in != tt.want {
+				wantCode = 1
+			}
+			if code := Run([]string{path}, &stdout, &stderr); code != wantCode {
+				t.Fatalf("検査の終了コード = %d、期待値 = %d (stdout: %s, stderr: %s)", code, wantCode, stdout.String(), stderr.String())
+			}
+			if wantCode == 1 && !strings.Contains(stderr.String(), "違反1件") {
+				t.Errorf("stderr = %q、期待値 = 違反1件の報告", stderr.String())
+			}
+			stdout.Reset()
+			stderr.Reset()
+			if code := Run([]string{"--write", path}, &stdout, &stderr); code != 0 {
+				t.Fatalf("修正の終了コード = %d、期待値 = 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
+			}
+			got, err := os.ReadFile(path) //#nosec G304
+			if err != nil {
+				t.Fatalf("修正後のファイルを読み込めません: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("書き換え結果 = %q、期待値 = %q", got, tt.want)
+			}
+			if code := Run([]string{path}, &stdout, &stderr); code != 0 {
+				t.Errorf("修正後の検査の終了コード = %d、期待値 = 0 (stdout: %s, stderr: %s)", code, stdout.String(), stderr.String())
 			}
 		})
 	}
