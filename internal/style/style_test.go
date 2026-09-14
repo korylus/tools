@@ -354,3 +354,32 @@ func TestCheckMaskedLine(t *testing.T) {
 		})
 	}
 }
+
+// TestContainsJapaneseは日本語の有無の判定を確認する。
+func TestContainsJapanese(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "ひらがな", text: "-- 昇順にする", want: true},
+		{name: "カタカナ", text: "エピソード", want: true},
+		{name: "漢字", text: "作品", want: true},
+		{name: "長音符のみ", text: "ー", want: true},
+		{name: "繰り返し記号のみ", text: "々", want: true},
+		{name: "英数字だけ", text: "CREATE TABLE users (id bigint);", want: false},
+		{name: "全角丸括弧だけ", text: "foo（bar）", want: false},
+		{name: "空文字", text: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := ContainsJapanese(tt.text); got != tt.want {
+				t.Errorf("ContainsJapanese(%q) = %v、期待値 = %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}

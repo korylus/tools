@@ -11,6 +11,7 @@
 // CheckLineはインラインコード・URL・見出しの番号を除外する。
 // 構文解析でコード範囲を除外する呼び出し元にはCheckMaskedLineを提供し、
 // URL・見出しの番号の除外とスタイルの検査を共有する。
+// 検査対象の行を絞り込む呼び出し元にはContainsJapaneseを提供する。
 package style
 
 import (
@@ -64,6 +65,18 @@ func CheckMaskedLine(text string) []Violation {
 	masked := make([]bool, len(runes))
 	maskURLs(runes, masked)
 	return checkLine(runes, masked)
+}
+
+// ContainsJapaneseはtextが日本語の文字を含むかを返す。
+// 構文解析を持たない形式で「§3の対象になりうる行」を絞り込む呼び出し元に向けた
+// 判定で、日本語の範囲の定義を本パッケージ1箇所に閉じるために公開している。
+func ContainsJapanese(text string) bool {
+	for _, r := range text {
+		if isJapanese(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkLineは除外範囲を適用し、各節の違反を1件ずつ節番号順に返す。

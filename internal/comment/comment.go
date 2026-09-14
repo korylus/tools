@@ -1,15 +1,22 @@
-// Package commentはkoryluslintのcommentサブコマンドを実装し、コードコメントが
+// Package commentはkoryluslintのcommentサブコマンドを実装し、ソース内の日本語が
 // korylus-lang.md §3の日本語テキストスタイルに従っているかを検査する。
 // ルール本体はinternal/styleが持ち、本パッケージはコメントの抽出・検査範囲の
 // 決定・報告を担う。
 //
 // モードは2つ。
 //
-//	comment [paths...]              ツリー全体のコメントを検査する (既定は ".")。
+//	comment [paths...]              ツリー全体を検査する (既定は ".")。
 //	comment -base=<ref> [paths...]  <ref> 以降に追加された行に検査を限定する。
 //
-// .goファイルはgo/parserで解析し、文字列リテラル中の "//" をコメントと誤認しない。
-// .templファイル (Goとして不正) は行単位で走査する。
+// 検査対象は形式ごとに決まる。
+//
+//   - .go: go/parserで解析し、文字列リテラル中の "//" をコメントと誤認しない
+//   - .templ: Goとして不正なため行単位で走査し、行頭 "//" のコメントを拾う
+//   - .sh / .ts: 構文解析でコメントと文字列の本文を抽出する
+//   - .sql / .css / .toml: 日本語を含む行をそのまま検査する
+//
+// コメントの外にあるi18nの訳文やシェルのメッセージも、日本語のスタイルの対象とする。
+// 日本語を含まない行と、定型ヘッダーで判別できる生成物は検査から外す。
 package comment
 
 import (
@@ -49,6 +56,53 @@ type finding struct {
 	line    int
 	section string
 	msg     string
+}
+
+// fileKindは検査対象ファイルの種別。抽出の方法が種別ごとに違う。
+type fileKind int
+
+const (
+	// kindUnsupportedは検査対象外。
+	kindUnsupported fileKind = iota
+	// kindGoはgo/parserでコメントを抽出する。
+	kindGo
+	// kindTemplは行頭 "//" のコメントを抽出する。
+	kindTempl
+	// kindShellはシェルのコメントと文字列を抽出する。
+	kindShell
+	// kindTypeScriptはTypeScriptのコメントと文字列を抽出する。
+	kindTypeScript
+	// kindPlainは日本語を含む行をそのまま検査する。
+	kindPlain
+)
+
+// plainExtsはkindPlainとして扱う拡張子。
+// コメントの構文を解析せず行全体を検査するため、コメント記号の違いに依存しない。
+var plainExts = map[string]bool{
+	".sql":  true,
+	".css":  true,
+	".toml": true,
+}
+
+// kindOfはpathの拡張子から検査の種別を返す。
+func kindOf(path string) fileKind {
+	if strings.HasSuffix(path, "_templ.go") {
+		return kindUnsupported
+	}
+	switch ext := filepath.Ext(path); {
+	case ext == ".go":
+		return kindGo
+	case ext == ".templ":
+		return kindTempl
+	case ext == ".sh":
+		return kindShell
+	case ext == ".ts":
+		return kindTypeScript
+	case plainExts[ext]:
+		return kindPlain
+	default:
+		return kindUnsupported
+	}
 }
 
 // Runはcommentサブコマンドのエントリポイント。argsはサブコマンド名を除いた
@@ -117,11 +171,8 @@ func collectFindings(roots []string, base string, stderr io.Writer) ([]finding, 
 				}
 				return nil
 			}
-			ext := filepath.Ext(path)
-			if ext != ".go" && ext != ".templ" {
-				return nil
-			}
-			if strings.HasSuffix(path, "_templ.go") {
+			kind := kindOf(path)
+			if kind == kindUnsupported {
 				return nil
 			}
 
@@ -139,19 +190,17 @@ func collectFindings(roots []string, base string, stderr io.Writer) ([]finding, 
 				}
 			}
 
-			groups, gerr := commentGroups(path, ext)
-			if gerr != nil {
-				fmt.Fprintf(stderr, "koryluslint comment: %s: %v\n", path, gerr)
+			found, cerr := checkFile(path, kind)
+			if cerr != nil {
+				fmt.Fprintf(stderr, "koryluslint comment: %s: %v\n", path, cerr)
 				return nil
 			}
-			for _, g := range groups {
-				for _, f := range checkGroup(g) {
-					if diffMode && !addedInFile[f.line] {
-						continue
-					}
-					f.file = path
-					all = append(all, f)
+			for _, f := range found {
+				if diffMode && !addedInFile[f.line] {
+					continue
 				}
+				f.file = path
+				all = append(all, f)
 			}
 			return nil
 		})
@@ -297,8 +346,8 @@ func isDirective(text string) bool {
 	return reDirective.MatchString(strings.TrimSpace(text))
 }
 
-// commentGroupsはファイルからコメント群を抽出する。生成物は空を返す。
-func commentGroups(path, ext string) ([][]commentLine, error) {
+// checkFileはファイルを読み、種別に応じた抽出をして違反を返す。生成物は空を返す。
+func checkFile(path string, kind fileKind) ([]finding, error) {
 	// pathはユーザー指定のrootを走査して得たもので、それを読むことこそが
 	// ファイルリンタの目的。gosecのファイル混入警告 (G304) はここでは当てはまらない。
 	src, err := os.ReadFile(path) //#nosec G304
@@ -308,10 +357,47 @@ func commentGroups(path, ext string) ([][]commentLine, error) {
 	if isGenerated(src) {
 		return nil, nil
 	}
-	if ext == ".templ" {
-		return templCommentGroups(src), nil
+
+	switch kind {
+	case kindShell, kindTypeScript:
+		return checkSyntax(src, kind)
+	case kindPlain:
+		return checkPlain(src), nil
+	case kindTempl:
+		return checkGroups(templCommentGroups(src)), nil
+	default:
+		groups, gerr := goCommentGroups(path, src)
+		if gerr != nil {
+			return nil, gerr
+		}
+		return checkGroups(groups), nil
 	}
-	return goCommentGroups(path, src)
+}
+
+// checkGroupsはコメント群をまとめて検査する。
+func checkGroups(groups [][]commentLine) []finding {
+	var fs []finding
+	for _, g := range groups {
+		fs = append(fs, checkGroup(g)...)
+	}
+	return fs
+}
+
+// checkPlainは日本語を含む行をそのまま §3で検査する。
+//
+// SQL・CSS・TOMLではコメントの外にある日本語も検査する。
+// インラインコードとURLはCheckLineが除外する。
+func checkPlain(src []byte) []finding {
+	var fs []finding
+	for i, line := range strings.Split(string(src), "\n") {
+		if !style.ContainsJapanese(line) {
+			continue
+		}
+		for _, v := range style.CheckLine(line) {
+			fs = append(fs, finding{line: i + 1, section: v.Section, msg: v.Message})
+		}
+	}
+	return fs
 }
 
 // goCommentGroupsはgo/parserを使い、文字列リテラル中の "//" を無視する。
