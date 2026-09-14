@@ -521,3 +521,178 @@ func TestRunDiffModeLimitsToAddedLines(t *testing.T) {
 		t.Errorf("標準出力 = %q、追加行 sample.go:6 の1件だけを期待", got)
 	}
 }
+
+// TestKindOfは拡張子から検査の種別を決めることを確認する。
+func TestKindOf(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path string
+		want fileKind
+	}{
+		{"internal/sample/sample.go", kindGo},
+		{"internal/sample/page.templ", kindTempl},
+		{"internal/sample/page_templ.go", kindUnsupported},
+		{"internal/query/queries/episodes.sql", kindPlain},
+		{"scripts/browse.sh", kindShell},
+		{"web/sidebar-toggle.ts", kindTypeScript},
+		{"web/style.css", kindPlain},
+		{"internal/i18n/locales/ja.toml", kindPlain},
+		{"README.md", kindUnsupported},
+		{"Makefile", kindUnsupported},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			if got := kindOf(tt.path); got != tt.want {
+				t.Errorf("kindOf(%q) = %d、期待値 = %d", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunChecksPlainFormatsはGo・templ以外の形式のコメントを検査することを
+// 確認する。
+func TestRunChecksPlainFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		file    string
+		content string
+	}{
+		{
+			name:    "SQLの行コメント",
+			file:    "queries.sql",
+			content: "-- sort_number 昇順の隣接行から導出する。\nSELECT 1;",
+		},
+		{
+			name:    "シェルの行コメント",
+			file:    "browse.sh",
+			content: "#!/bin/sh\n# Basic 認証つきのURLへ到達する。\necho hi",
+		},
+		{
+			name:    "TypeScriptの行コメント",
+			file:    "toggle.ts",
+			content: "// aria-expanded 属性を切り替える。\nexport const a = 1",
+		},
+		{
+			name:    "CSSのブロックコメント",
+			file:    "style.css",
+			content: "/* Basecoat 1.0 のトークンを上書きする。 */\n:root { color: red }",
+		},
+		{
+			name:    "TOMLの行コメント",
+			file:    "ja.toml",
+			content: "# 見出しに使う 1 行の文面。\n[title]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeFile(t, dir, tt.file, tt.content)
+
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{dir}, &stdout, &stderr)
+
+			if code != 1 {
+				t.Fatalf("終了コード = %d、期待値 = 1、標準出力 = %s", code, stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "§3.2") {
+				t.Errorf("標準出力 = %q、§3.2の違反を期待", stdout.String())
+			}
+		})
+	}
+}
+
+// TestRunChecksPlainFormatsOutsideCommentsはコメントの外にある日本語の文面も
+// 検査することを確認する。
+// i18n翻訳ファイルの訳文とシェルが出力するメッセージは §3の対象だが、コメント
+// 記号で絞り込むと検査から漏れる。
+func TestRunChecksPlainFormatsOutsideComments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		file     string
+		content  string
+		wantLine string
+	}{
+		{
+			name:     "TOMLの訳文",
+			file:     "ja.toml",
+			content:  "[password_confirmation]\nother = \"新しいパスワード（確認）\"\n",
+			wantLine: "ja.toml:2:",
+		},
+		{
+			name:     "シェルのメッセージ",
+			file:     "load.sh",
+			content:  "#!/bin/sh\necho \"バケットに .tgz のバックアップが見つかりません\"\n",
+			wantLine: "load.sh:2:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeFile(t, dir, tt.file, tt.content)
+
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{dir}, &stdout, &stderr)
+
+			if code != 1 {
+				t.Fatalf("終了コード = %d、期待値 = 1、標準出力 = %s", code, stdout.String())
+			}
+			if !strings.Contains(stdout.String(), tt.wantLine) {
+				t.Errorf("標準出力 = %q、%sの違反を期待", stdout.String(), tt.wantLine)
+			}
+		})
+	}
+}
+
+// TestRunPlainSkipsLinesWithoutJapaneseは日本語を含まない行が検査に載らないことを
+// 確認する。
+// §3は日本語のテキストのスタイルを定めるもので、コードや生成物のダンプは対象外。
+func TestRunPlainSkipsLinesWithoutJapanese(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "schema.sql", strings.Join([]string{
+		"-- Dumped from database version 17.5 (Debian 17.5-1.pgdg130+1)",
+		"CREATE TABLE users (id bigint NOT NULL);",
+		"SELECT foo AS \"bar（baz）\" FROM t;",
+	}, "\n"))
+	writeFile(t, dir, "app.ts", "const label = `count: ${n}`\n")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{dir}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("終了コード = %d、期待値 = 0、標準出力 = %s", code, stdout.String())
+	}
+}
+
+// TestRunSkipsGoStringLiteralsは .goの文字列リテラルを検査しないことを確認する。
+// 描画結果と突き合わせるテストのリテラルは §3に反する形を意図して持つため、
+// 検査に載せない。
+func TestRunSkipsGoStringLiterals(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "sample_test.go", strings.Join([]string{
+		"package sample",
+		"",
+		"const want = \"作品 1 を新しいタブで開く\"",
+	}, "\n"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{dir}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("終了コード = %d、期待値 = 0、標準出力 = %s", code, stdout.String())
+	}
+}

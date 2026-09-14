@@ -1,7 +1,7 @@
 // Command koryluslintはKorylus共通のリンタを単一バイナリにまとめ、
 // サブコマンドで各リンタへディスパッチする。
 //
-//	koryluslint comment [-base=<ref>] [paths...]  コードコメントの日本語スタイルを検査する
+//	koryluslint comment [-base=<ref>] [paths...]  ソースコードの日本語スタイルを検査する
 //	koryluslint md [-base=<ref>] [paths...]       Markdownの句点改行と日本語スタイルを検査する
 //
 // 各サブコマンドの実体はinternal/配下のパッケージに置き、本ファイルは
@@ -25,7 +25,9 @@ const usageText = `koryluslint - Korylus共通のリンタ
   koryluslint md [-base=<ref>] [paths...]
 
 サブコマンド:
-  comment   コードコメントの日本語テキストスタイル (korylus-lang.md §3) を検査する
+  comment   ソースコードの日本語テキストスタイル (korylus-lang.md §3) を検査する
+            .go / .templはコメント、.sh / .tsはコメントと文字列の本文が対象
+            .sql / .css / .tomlは日本語を含む行が対象
   md        Markdownドキュメントの句点改行 (semantic line break) と日本語テキストスタイル (korylus-lang.md §3) を検査する
 
 共通フラグ:
