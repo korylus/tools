@@ -50,6 +50,15 @@ type Violation struct {
 	Message string
 }
 
+// Priorityは同じ行・同じ節の違反を集約するときの優先度を返す。
+// 全角丸括弧は半角に直すとスペースの不足が現れるため、先に報告する。
+func (v Violation) Priority() int {
+	if v.Message == msgParen {
+		return 1
+	}
+	return 0
+}
+
 // CheckLineはtextを §3のスタイルで検査し、見つかった違反を節番号の順に返す。
 // textにはコードコメントの本文か、Markdownの1行を渡す。
 // 報告は行単位なので、同じ節の違反が1行に複数あっても1件に畳む。

@@ -56,7 +56,11 @@ func checkSyntax(src []byte, kind fileKind) ([]finding, error) {
 	}
 
 	// 1行に複数の文字列やコメントがあっても、同じ節の違反は1件だけ報告する。
-	found := make(map[finding]bool)
+	type violationKey struct {
+		line    int
+		section string
+	}
+	found := make(map[violationKey]style.Violation)
 	add := func(text string, firstLine int, comment bool) {
 		for i, line := range strings.Split(text, "\n") {
 			if !style.ContainsJapanese(line) {
@@ -67,7 +71,10 @@ func checkSyntax(src []byte, kind fileKind) ([]finding, error) {
 				check = style.CheckLine
 			}
 			for _, v := range check(line) {
-				found[finding{line: firstLine + i, section: v.Section, msg: v.Message}] = true
+				key := violationKey{line: firstLine + i, section: v.Section}
+				if previous, ok := found[key]; !ok || v.Priority() > previous.Priority() {
+					found[key] = v
+				}
 			}
 		}
 	}
@@ -126,8 +133,8 @@ walk:
 		}
 	}
 	var fs []finding
-	for f := range found {
-		fs = append(fs, f)
+	for key, v := range found {
+		fs = append(fs, finding{line: key.line, section: key.section, msg: v.Message})
 	}
 	sort.Slice(fs, func(i, j int) bool {
 		if fs[i].line != fs[j].line {

@@ -115,3 +115,36 @@ func TestRunSyntaxErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestRunSyntaxParenPriorityは同じ物理行の別の断片にも全角丸括弧の優先順位を適用する。
+func TestRunSyntaxParenPriority(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ext  string
+		src  string
+	}{
+		{"TypeScriptの文字列に全角丸括弧", ".ts", "const label = '本文（補足）'; // 本文(補足)\n"},
+		{"TypeScriptのコメントに全角丸括弧", ".ts", "const label = '本文(補足)'; // 本文（補足）\n"},
+		{"TypeScriptの複数の文字列", ".ts", "const labels = ['本文(補足)', '本文（補足）'];\n"},
+		{"シェルの文字列に全角丸括弧", ".sh", "echo '本文（補足）' # 本文(補足)\n"},
+		{"シェルのコメントに全角丸括弧", ".sh", "echo '本文(補足)' # 本文（補足）\n"},
+		{"シェルの複数の引数", ".sh", "echo '本文(補足)' '本文（補足）'\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeFile(t, dir, "sample"+tt.ext, tt.src)
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{dir}, &stdout, &stderr)
+			if code != 1 || stderr.String() != "\nkoryluslint comment: 日本語スタイル違反1件\n" {
+				t.Fatalf("終了コード = %d、標準エラー = %q、違反1件を期待", code, stderr.String())
+			}
+			if strings.Count(stdout.String(), "§3.1:") != 1 || !strings.Contains(stdout.String(), "全角丸括弧が使われている") {
+				t.Errorf("診断 = %q、全角丸括弧の違反1件を期待", stdout.String())
+			}
+		})
+	}
+}

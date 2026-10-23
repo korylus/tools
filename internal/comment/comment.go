@@ -515,7 +515,7 @@ func addedLines(base string) (map[string]map[int]bool, error) {
 
 // gitOutputはgitコマンドを実行し標準出力を返す。
 func gitOutput(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //#nosec G204 -- 実行ファイルはgitに固定し、引数をシェルへ渡さない。
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
