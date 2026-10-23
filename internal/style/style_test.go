@@ -66,6 +66,94 @@ func TestCheckLineParen(t *testing.T) {
 	}
 }
 
+func TestCheckLineParenSpacing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		text         string
+		wantSections []string
+	}{
+		{name: "開き括弧の直前の漢字を検出する", text: "作成(succeeded_atがNULL) の場合", wantSections: []string{"3.1"}},
+		{name: "閉じ括弧の直後のひらがなを検出する", text: "ユーザーIDを取得 (削除済みは0)を返す", wantSections: []string{"3.1"}},
+		{name: "カタカナとの隣接を検出する", text: "ユーザー(削除済み) を除く", wantSections: []string{"3.1"}},
+		{name: "長音符との隣接を検出する", text: "サーバー(本番) を使う", wantSections: []string{"3.1"}},
+		{name: "繰り返し記号との隣接を検出する", text: "人々(利用者) が使う", wantSections: []string{"3.1"}},
+		{name: "同じ行に複数あっても1件に畳む", text: "作成(1)と更新(2)", wantSections: []string{"3.1"}},
+		{name: "両端にスペースがあれば違反ではない", text: "テスト (テスト) テスト"},
+		{name: "句点との隣接は違反ではない", text: "ユーザーIDを取得する (削除済みは0)。"},
+		{name: "読点との隣接は違反ではない", text: "取得する (削除済みは0)、次に進む"},
+		{name: "かぎ括弧との隣接は違反ではない", text: "「作成」(succeeded_at) を見る"},
+		{name: "英数字との隣接は違反ではない", text: "翻訳はT(ctx)。"},
+		{name: "関数呼び出しの空の括弧は違反ではない", text: "Foo() を呼ぶ"},
+		{name: "行頭の開き括弧は違反ではない", text: "(補足) 日本語の文"},
+		{name: "行末の閉じ括弧は違反ではない", text: "日本語の文 (補足)"},
+		{name: "インラインコードの中は対象外", text: "悪い例は `作成(NULL)の場合` と書いたもの"},
+		{name: "インラインコードに隣り合う括弧は対象外", text: "`作成`(NULL) の場合"},
+		{name: "URLの中は対象外", text: "詳細は https://example.com/資料(例) を参照する"},
+		{name: "括弧付きの番号は対象外", text: "(1)英数字と日本語の間のスペースを詰める"},
+		{name: "閉じ括弧付きの番号は対象外", text: "1)英数字と日本語の間のスペースを詰める"},
+		{name: "箇条書きの括弧付きの番号も対象外", text: "- (1)英数字と日本語の間のスペースを詰める"},
+		{name: "行の途中の番号は対象外にしない", text: "手順 (1)を参照する", wantSections: []string{"3.1"}},
+		{name: "全角丸括弧と同じ行では全角丸括弧だけを報告する", text: "作成(NULL) と更新（NULL）", wantSections: []string{"3.1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			vs := CheckLine(tt.text)
+			if got := sectionsOf(vs); !equalStrings(got, tt.wantSections) {
+				t.Errorf("CheckLine(%q) が検出した節番号 = %v、期待値 = %v", tt.text, got, tt.wantSections)
+			}
+		})
+	}
+}
+
+// TestCheckLineParenSpacingMessageは、半角丸括弧の外側の違反を全角丸括弧と
+// 区別できるメッセージで報告することを確認する。
+func TestCheckLineParenSpacingMessage(t *testing.T) {
+	t.Parallel()
+
+	vs := CheckLine("作成(NULL)の場合")
+	if len(vs) != 1 {
+		t.Fatalf("違反数 = %d、期待値 = 1", len(vs))
+	}
+	if vs[0].Message != msgParenSpacing {
+		t.Errorf("メッセージ = %q、期待値 = %q", vs[0].Message, msgParenSpacing)
+	}
+
+	vs = CheckLine("作成(NULL) と更新（NULL）")
+	if len(vs) != 1 || vs[0].Message != msgParen {
+		t.Errorf("全角丸括弧と同じ行の違反 = %v、全角丸括弧のメッセージ1件を期待", vs)
+	}
+}
+
+// TestCheckMaskedLineParenSpacingは、構文解析済みの本文でも半角丸括弧の外側を
+// 検査することを確認する。
+func TestCheckMaskedLineParenSpacing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		text         string
+		wantSections []string
+	}{
+		{"本文の違反を検出する", "作成(NULL)の場合", []string{"3.1"}},
+		{"空白に置き換えたコードに隣り合う括弧は対象外", "作成は `    `(NULL) の場合", nil},
+		{"URL内の括弧は対象外", "参照先は https://example.com/資料(例) である", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := sectionsOf(CheckMaskedLine(tt.text)); !equalStrings(got, tt.wantSections) {
+				t.Errorf("検出した節番号 = %v、期待値 = %v", got, tt.wantSections)
+			}
+		})
+	}
+}
+
 func TestCheckLineSpacing(t *testing.T) {
 	t.Parallel()
 

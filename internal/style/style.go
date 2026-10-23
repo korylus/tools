@@ -1,8 +1,9 @@
 // Package styleはkorylus-lang.md §3の日本語テキストスタイルを検査する。
 //
-// 検査するのは2点。
+// 検査するのは3点。
 //
 //   - §3.1: 地の文に全角丸括弧を使っていないか
+//   - §3.1: 半角丸括弧の外側に日本語の文字がスペースを挟まずに隣り合っていないか
 //   - §3.2: 半角英数字と日本語が隣り合う箇所に半角スペースを入れていないか
 //
 // 検査はテキスト1行ごとに行う。
@@ -27,8 +28,9 @@ const (
 )
 
 const (
-	msgParen   = "§3.1: 全角丸括弧が使われている (半角丸括弧に直す)"
-	msgSpacing = "§3.2: 半角英数字と日本語の間に半角スペースがある (スペースを詰める)"
+	msgParen        = "§3.1: 全角丸括弧が使われている (半角丸括弧に直す)"
+	msgParenSpacing = "§3.1: 半角丸括弧の外側にスペースが無い (前後に半角スペースを入れる)"
+	msgSpacing      = "§3.2: 半角英数字と日本語の間に半角スペースがある (スペースを詰める)"
 )
 
 // reNumberTokenは見出しや箇条書きの番号にあたるトークンにマッチする。
@@ -82,8 +84,13 @@ func ContainsJapanese(text string) bool {
 // checkLineは除外範囲を適用し、各節の違反を1件ずつ節番号順に返す。
 func checkLine(runes []rune, masked []bool) []Violation {
 	var vs []Violation
-	if hasFullWidthParen(runes, masked) {
+	// 同じ節の違反は1件に畳むため、全角丸括弧を直すと現れる外側のスペースの
+	// 違反は、全角丸括弧が無い行でだけ報告する。
+	switch {
+	case hasFullWidthParen(runes, masked):
 		vs = append(vs, Violation{Section: sectionParen, Message: msgParen})
+	case hasParenWithoutSpace(runes, masked):
+		vs = append(vs, Violation{Section: sectionParen, Message: msgParenSpacing})
 	}
 	if hasSpacing(runes, masked) {
 		vs = append(vs, Violation{Section: sectionSpacing, Message: msgSpacing})
@@ -100,6 +107,37 @@ func hasFullWidthParen(runes []rune, masked []bool) bool {
 		if r == '（' || r == '）' {
 			return true
 		}
+	}
+	return false
+}
+
+// hasParenWithoutSpaceは半角丸括弧の外側に日本語の文字が隣り合う箇所があるかを返す。
+//
+// 対象は `(` の直前と `)` の直後に限る。
+// 句読点・英数字・記号との隣接は違反にせず、`)。` で文を終える書き方や
+// `T(ctx)` のようなコード風の記述を報告しない。
+// 行頭の `(` の前と行末の `)` の後ろは隣り合う文字が無いため、条件に当たらない。
+func hasParenWithoutSpace(runes []rune, masked []bool) bool {
+	for i, r := range runes {
+		if masked[i] {
+			continue
+		}
+		var nb int
+		switch r {
+		case '(':
+			nb = i - 1
+		case ')':
+			nb = i + 1
+		default:
+			continue
+		}
+		if nb < 0 || nb >= len(runes) || masked[nb] || !isJapanese(runes[nb]) {
+			continue
+		}
+		if r == ')' && isLeadingNumberToken(runes, i+1) {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -129,7 +167,7 @@ func hasSpacing(runes []rune, masked []bool) bool {
 		if !isAlnumJapanesePair(left, right) {
 			continue
 		}
-		if isNumberedHeadingGap(runes, i) {
+		if isLeadingNumberToken(runes, i) {
 			continue
 		}
 		return true
@@ -143,16 +181,17 @@ func isAlnumJapanesePair(left, right rune) bool {
 	return isASCIIAlnum(left) && isJapanese(right) || isJapanese(left) && isASCIIAlnum(right)
 }
 
-// isNumberedHeadingGapはspの位置のスペースが、見出しや箇条書きの番号と
-// それに続く見出し文の間にあるかを返す (§3.2の対象外)。
+// isLeadingNumberTokenはendの直前で終わるトークンが、行の先頭に置かれた見出しや
+// 箇条書きの番号かを返す。
+// 番号とそれに続く見出し文の間は §3.1・§3.2の対象外になる。
 // 番号は行の先頭にあるものだけを認め、その前に置けるのは見出し記号・箇条書き記号
 // などのmarkerPrefixに限る。
-func isNumberedHeadingGap(runes []rune, sp int) bool {
-	start := sp
+func isLeadingNumberToken(runes []rune, end int) bool {
+	start := end
 	for start > 0 && runes[start-1] != ' ' && runes[start-1] != '\t' {
 		start--
 	}
-	if !reNumberToken.MatchString(string(runes[start:sp])) {
+	if !reNumberToken.MatchString(string(runes[start:end])) {
 		return false
 	}
 	for _, r := range runes[:start] {
