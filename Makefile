@@ -6,6 +6,14 @@ help: ## ヘルプを表示
 build: ## koryluslintをビルド (bin/koryluslintに出力)
 	go build -o bin/koryluslint ./cmd/koryluslint
 
+# BINDIRはinstall-korylusflowが実行ファイルを置くディレクトリ。
+BINDIR ?= $(HOME)/.local/bin
+
+.PHONY: install-korylusflow
+install-korylusflow: ## korylusflowをビルドしてBINDIR (既定は~/.local/bin) に置く
+	mkdir -p $(BINDIR)
+	go build -o $(BINDIR)/korylusflow ./cmd/korylusflow
+
 .PHONY: test
 test: ## テストを実行
 	go test ./...
