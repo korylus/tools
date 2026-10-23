@@ -75,7 +75,7 @@ type docLine struct {
 	// YAMLフロントマターの行もMarkdownの本文ではないため地の文に数えない。
 	prose bool
 	// styleは §3スタイルと句点改行の区切り位置を判定するテキスト。
-	// ASTで特定したコード本文とHTMLコメントを半角スペースに置き換える。
+	// パーサーで特定したコード本文・HTMLコメント・リンク先の構文を半角スペースに置き換える。
 	// textとルーン数が揃うため、位置をtextへそのまま対応づけられる。
 	style string
 	// emphasisClosersはASTで強調の閉じと確認した記号の位置 (0始まりのルーン数)。
@@ -495,7 +495,7 @@ func listAllMarkdown(root string) []string {
 
 // gitOutputはgitコマンドを実行し標準出力を返す。
 func gitOutput(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //#nosec G204 -- 実行ファイルはgitに固定し、引数をシェルへ渡さない。
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

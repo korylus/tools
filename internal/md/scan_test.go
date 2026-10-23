@@ -278,3 +278,43 @@ func TestFrontMatterRequiresYAMLMapping(t *testing.T) {
 		})
 	}
 }
+
+// TestLinkSyntaxExcludedはリンク先の括弧を本文として検査せず、表示文と前後の本文は検査する。
+func TestLinkSyntaxExcluded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		doc  string
+		want []int
+	}{
+		{"絶対URLの後ろの日本語", "[資料](https://example.com)を参照する。\n", nil},
+		{"相対リンクの後ろの日本語", "[資料](./guide.md)を参照する。\n", nil},
+		{"画像の後ろの日本語", "![図](./image.png)を確認する。\n", nil},
+		{"空のリンク先", "[資料]()を参照する。\n", nil},
+		{"入れ子の括弧を持つリンク先", "[資料](./資料(補足)日本語.md)を参照する。\n", nil},
+		{"山括弧で囲むリンク先", "[資料](<./資料(補足)日本語.md>)を参照する。\n", nil},
+		{"リンク先のタイトル", "[資料](./guide.md \"タイトル\")を参照する。\n", nil},
+		{"改行を挟むリンク先", "[資料](\n./guide.md)を参照する。\n", nil},
+		{"空の表示文", "[](./guide.md)を参照する。\n", nil},
+		{"参照形式のリンク", "[資料][guide]を参照する。\n\n[guide]: ./guide.md\n", nil},
+		{"リンクの中の強調", "[**資料**](./guide.md)を参照する。\n", nil},
+		{"表示文の括弧の違反は残す", "[資料(補足)](./guide.md)を参照する。\n", []int{1}},
+		{"表示文の全角丸括弧の違反は残す", "[資料（補足）](./guide.md)を参照する。\n", []int{1}},
+		{"表示文の英数字のスペース違反は残す", "[Go 版](./guide.md)を参照する。\n", []int{1}},
+		{"リンクの前の違反は残す", "本文(補足) と[資料](./guide.md)を参照する。\n", []int{1}},
+		{"リンクの後ろの違反は残す", "[資料](./guide.md)と本文(補足) を参照する。\n", []int{1}},
+		{"リンクの後ろの句点改行は残す", "[資料](./guide.md)を読む。次に進む。\n", []int{1}},
+		{"日本語のリンク先", "[資料](補足)を確認する。\n", nil},
+		{"不正なリンクの後ろの本文は検査する", "[資料](補足 本文(例) を確認する。\n", []int{1}},
+		{"コード片はリンクと解釈しない", "\x60[資料](./guide.md)\x60 と本文(補足) を確認する。\n", []int{1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := linesOf(violations(tt.doc)); !slices.Equal(got, tt.want) {
+				t.Errorf("違反の行番号 = %v、期待値 = %v", got, tt.want)
+			}
+		})
+	}
+}

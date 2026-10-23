@@ -5,15 +5,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 )
 
 // eachLineはMarkdownの構文を解析し、コードブロック以外の行を検査へ渡す。
 // フェンスの種類・長さと引用・リストの入れ子はパーサーで判定する。
 // HTMLコメントはインラインコードと区別して除外し、元の行番号を維持する。
-// インラインコードとHTMLコメントの範囲はdocLine.styleで半角スペースに置き換え、
+// インラインコード・HTMLコメント・リンク先の構文はdocLine.styleで半角スペースに置き換え、
 // 句点改行と §3の検査がどちらもこの範囲を避けられるようにする。
 // 強調の閉じ記号の位置はdocLine.emphasisClosersに集め、句点改行が開きの記号と
 // 区別できるようにする。
@@ -22,7 +22,6 @@ import (
 // して扱うため、行の範囲は文書の先頭から自前で求める。
 func eachLine(document string, onLine func(dl docLine)) {
 	source := []byte(document)
-	root := goldmark.DefaultParser().Parse(text.NewReader(source))
 	lines := strings.Split(document, "\n")
 	frontMatterEnd := frontMatterEndLine(lines)
 	starts := make([]int, len(lines))
@@ -50,6 +49,17 @@ func eachLine(document string, onLine func(dl docLine)) {
 			}
 		}
 	}
+	inlineParsers := parser.DefaultInlineParsers()
+	for i := range inlineParsers {
+		if inlineParsers[i].Value == parser.NewLinkParser() {
+			inlineParsers[i].Value = &linkMaskParser{InlineParser: parser.NewLinkParser(), mask: mask}
+		}
+	}
+	root := parser.NewParser(
+		parser.WithBlockParsers(parser.DefaultBlockParsers()...),
+		parser.WithInlineParsers(inlineParsers...),
+		parser.WithParagraphTransformers(parser.DefaultParagraphTransformers()...),
+	).Parse(text.NewReader(source))
 	// maskLineはoffsetから始まる1行の、マスクした範囲を半角スペースへ置き換えて返す。
 	// 多バイト文字も1つの半角スペースにすることで、元の行とルーン数が揃う。
 	// 句点改行の区切り位置を元の行と突き合わせるために必要になる。
@@ -172,6 +182,33 @@ func eachLine(document string, onLine func(dl docLine)) {
 			style:           style,
 			emphasisClosers: closers,
 		})
+	}
+}
+
+// linkMaskParserは標準のリンク解析が消費したリンク先の構文を除外する。
+// 表示文の閉じ角括弧の後ろから解析後の位置までに限り、表示文と前後の本文は検査に残す。
+// リンク先の括弧の入れ子・エスケープ・改行も標準のパーサーに判定させる。
+type linkMaskParser struct {
+	parser.InlineParser
+	mask func(start, stop int)
+}
+
+// Parseはリンクまたは画像として解釈されたときだけ、リンク先の構文を除外する。
+func (p *linkMaskParser) Parse(parent ast.Node, reader text.Reader, pc parser.Context) ast.Node {
+	_, start := reader.Position()
+	node := p.InlineParser.Parse(parent, reader, pc)
+	switch node.(type) {
+	case *ast.Link, *ast.Image:
+		_, end := reader.Position()
+		p.mask(start.Start+1, end.Start)
+	}
+	return node
+}
+
+// CloseBlockは標準のリンク解析にブロック終端の後始末を委ねる。
+func (p *linkMaskParser) CloseBlock(parent ast.Node, reader text.Reader, pc parser.Context) {
+	if closer, ok := p.InlineParser.(parser.CloseBlocker); ok {
+		closer.CloseBlock(parent, reader, pc)
 	}
 }
 
