@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "unattended-result",
+  "description": "無人実行モードのスキルが返す構造化出力",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "escalations", "verification_items", "protected_changes", "protected_checks"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "escalated"]
+    },
+    "summary": {
+      "type": "string",
+      "description": "実施した内容の要約"
+    },
+    "escalations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason", "question", "options", "recommended"],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "止めた理由"
+          },
+          "question": {
+            "type": "string",
+            "description": "人間に判断してほしいこと"
+          },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "選択肢"
+          },
+          "recommended": {
+            "type": "string",
+            "description": "推奨する選択肢。推奨が無ければ空文字列"
+          }
+        }
+      }
+    },
+    "verification_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "title", "target", "steps", "expected"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["screen", "process"]
+          },
+          "title": {
+            "type": "string",
+            "description": "確認すること"
+          },
+          "target": {
+            "type": "string",
+            "description": "画面ならパス、処理なら実行するコマンド"
+          },
+          "steps": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "確認の手順"
+          },
+          "expected": {
+            "type": "string",
+            "description": "期待する結果"
+          }
+        }
+      }
+    },
+    "protected_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["area", "summary", "reason"],
+        "properties": {
+          "area": {
+            "type": "string",
+            "description": "触れた保護領域の名前"
+          },
+          "summary": {
+            "type": "string",
+            "description": "その領域に加えた変更"
+          },
+          "reason": {
+            "type": "string",
+            "description": "変更した理由 (作業計画書の設計やレビューの指摘との対応)"
+          }
+        }
+      }
+    },
+    "protected_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["area", "point", "result", "detail"],
+        "properties": {
+          "area": {
+            "type": "string",
+            "description": "照合した保護領域の名前"
+          },
+          "point": {
+            "type": "string",
+            "description": "照合した観点"
+          },
+          "result": {
+            "type": "string",
+            "enum": ["ok", "concern"]
+          },
+          "detail": {
+            "type": "string",
+            "description": "結果の根拠"
+          }
+        }
+      }
+    }
+  }
+}

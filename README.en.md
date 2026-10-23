@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-09-14 -->
+<!-- last_synced: 2026-10-23 -->
 
 # korylus-tools
 
@@ -54,6 +54,209 @@ Test literals compared against rendered output intentionally keep forms that vio
 For `md`, `--all` checks every `.md` file in full instead of only changed lines, and `--write` fixes semantic line breaks in place.
 Japanese text style violations are reported with the updated line numbers, and remaining violations cause exit code 1.
 
+## korylusflow
+
+`korylusflow` is a CLI that decides whose turn it is and what to do next, and records the state, when the tasks of a work plan are carried out by interactive sessions, one per role.
+The implementer, reviewer (Codex), and reviewer (Claude Code) sessions each ask `korylusflow` whether it is their turn, work as the returned instruction says, and then record completion.
+Only `korylusflow` decides what happens next; agents never decide it.
+`korylusflow` itself never starts Claude Code or Codex.
+
+### Usage
+
+```sh
+korylusflow wait <plan path> -role=<role> [-timeout=<duration>]
+korylusflow done <plan path> -role=<role>
+korylusflow status <plan path>
+korylusflow report <plan path>
+```
+
+Run every subcommand at the project root and give the plan path relative to that root.
+The role is one of `implementer`, `reviewer-codex` (reviewer (Codex)), and `reviewer-claude` (reviewer (Claude Code)).
+
+| Subcommand | Role                                                                                                                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait`     | Wait until it is the role's turn and write the next instruction to standard output; return `action: wait` if the turn does not come within `-timeout`                  |
+| `done`     | Check and record the completion of the current step and decide the next step; for the implementation step, read verification items as a JSON array from standard input |
+| `status`   | Show the plan's progress, the current task, step, role whose turn it is, why it is waiting for a human, and the time spent                                             |
+| `report`   | Rebuild the latest version of the work report; if steps were recorded after the latest version, build the next version                                                 |
+
+The first line of an instruction is `action: <kind>` (`implement`, `review`, `fix`, `ask`, `finish`, or `wait`).
+It is followed by the skill and arguments to run and every step to take afterwards, every time.
+This lets a session continue from the latest instruction alone, even after its context has been compacted.
+
+`done` exits with the following codes.
+
+| Exit code | Meaning                                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| 0         | It recorded the completion                                                                               |
+| 1         | Error                                                                                                    |
+| 2         | It did not accept the record because a completion condition is not met (fix it per the reason and retry) |
+
+### Flow of a task
+
+1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task, or main if there is no develop)
+2. The implementer implements the task with `/korylus-do-plan-task` and commits
+3. A reviewer reviews with `/korylus-review`; Codex does the first review, and later reviews are done by a different role than the previous one
+4. `korylusflow` answers the auto-fixable findings in the review document with the recommended options, and the reviewer fixes the code and commits
+5. On Request Changes go back to 3 (up to 3 reviews); on Comment or Approve move on to the next task
+
+For tasks done by a human, findings that need a human decision, and reaching the review limit, it tells the current session to ask the human.
+
+Task prefixes are read as follows.
+
+| Prefix                                           | Working directory                                            |
+| ------------------------------------------------ | ------------------------------------------------------------ |
+| One starting with `/`, such as `[/workspace/go]` | That path                                                    |
+| `[Go]`, `[Rails]`, or no prefix                  | Read as `/workspace/go`, `/workspace/rails`, or `/workspace` |
+| Anything else (the name of the person)           | None (a task done by a human)                                |
+
+### Work report
+
+When the plan reaches the end, it builds a Markdown work report `report-<version>.md` from the state, timing records, the plan, and git.
+It does not have an LLM write any text; it lists only the facts in the records.
+
+- Overview (plan, period, and branch order per repository)
+- Changes per task (branch, commits, changed files and line counts, expected line counts, review results, and the topics of the implementation decision log)
+- Deferred findings and the history of waiting for a human
+- Time spent (totals per role and step, and a breakdown per task)
+- Protected areas (what was declared and the command to see the diff)
+- The verification checklist and a field for overall comments
+
+A human checks OK or NG for each checklist item and writes comments.
+If tasks are added to the plan and the loop runs again, it builds the next version at the end of the plan.
+The next version lists the items that were NG in the previous version and new items first, and lists items that were OK in an earlier version only by title as verified.
+Rebuilding the same version with `report` keeps the results already written in it.
+If what was written hides the report's section boundaries, for example with an unclosed code block, it does not rebuild the report and shows what to fix instead.
+
+### Where state and work reports are stored
+
+State and work reports are kept in `docs/private/plans/files/<plan name>/` so that they remain as history together with the plan.
+
+| File                  | Content                                                                 |
+| --------------------- | ----------------------------------------------------------------------- |
+| `flow.json`           | The current task, step, and role whose turn it is, and records per task |
+| `flow.lock`           | An empty file for the file lock                                         |
+| `timeline.jsonl`      | The start and end times of each step                                    |
+| `report-<version>.md` | Work reports                                                            |
+
+### Installing
+
+Build it with `make install-korylusflow`, which places it at `~/.local/bin/korylusflow` (change the location with `BINDIR=<directory>`).
+Use the built binary instead of running it from the working tree with `go run`, so that the running code does not change when a branch is switched in the middle of the loop.
+
+## koryluspilot
+
+`koryluspilot` is an orchestrator that carries the tasks of one work plan through to the end automatically.
+For each task, it runs implementation, commit, gate checks, review, answers, and fixes in a container per role, and at the end of the plan it builds a work report (HTML).
+A human steps in only when it stops after detecting a change outside the agreed approach, and when verifying behavior in the work report.
+
+Only koryluspilot decides what happens next; agents never call the next role.
+Role containers receive no secrets, so agents cannot push.
+A human pushes and opens pull requests based on the branch order listed in the work report.
+
+### Usage
+
+```sh
+koryluspilot run <plan path> [-note=<note>] [-approve] [-config=<config file>]
+koryluspilot report <plan path> [-addr=<listen address>]
+koryluspilot status <plan path>
+koryluspilot usage [-config=<config file>]
+```
+
+Run every subcommand at the project root (the human checkout) and give the plan path relative to that root.
+
+| Subcommand | Role                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`      | Advance the unfinished tasks of the plan in order and build a work report at the end; read verification results and run the feedback loop |
+| `report`   | Serve the latest version of the work report under `/_koryluspilot/` and save the verification results entered in the browser              |
+| `status`   | Show the plan's progress, the current step, and why it stopped                                                                            |
+| `usage`    | Show Claude Code / Codex usage and when the limits are likely to be reached                                                               |
+
+`run` exits with the following codes.
+
+| Exit code | Meaning                                                                               |
+| --------- | ------------------------------------------------------------------------------------- |
+| 0         | It is waiting for the work report to be verified, or it finished the plan as verified |
+| 1         | Error                                                                                 |
+| 2         | It stopped on a stop condition                                                        |
+
+### What it reads from the plan
+
+Write tasks in the plan's "タスクリスト" (task list) section in the form `- [ ] **<task number>**: [<platform>] <task name>`.
+koryluspilot also reads the following lines under each task.
+
+- `**保護領域**:` the protected areas the task may touch (names defined in the config file)
+- `**想定行数**:` the expected line count that the gate check compares the implementation against
+- `**対応する確認項目**:` the work report items a feedback task addresses (`第N版 #M`)
+
+### Flow of a run
+
+1. When starting the first task, fetch the configured `base_branch` from GitHub without authentication and pin it as `<plan name>-base`
+2. For each task, create the branch `<plan name>-<task number>` from the previous task's branch and have the implementer run `/korylus-do-plan-task` in unattended mode
+3. Have the implementer commit, import the commit into the hub, and run the gate checks
+4. Have a reviewer review with `/korylus-review`, answer with the recommended options, and have it fix the code; on Request Changes, re-review with another role
+5. At the end of the plan, bring the hub's branches into the human checkout and build the work report
+
+Before starting each agent, it checks usage and waits for the reset if the limit is likely to be exceeded.
+
+### Resuming after a stop
+
+When it stops, it shows the reason and the role (container) to use for resolving it, then exits with code 2.
+Fix the cause in that role's container and resume from the stopped step with the following command.
+
+```sh
+koryluspilot run <plan path> -note=<note>
+```
+
+The `-note` text is passed to the agent of the resumed step.
+If you fixed the plan or the config file, add `-approve` to accept the current content as the new baseline.
+
+### Verification and the feedback loop
+
+Once the plan reaches the end, verify the behavior as follows.
+
+1. Serve the work report with `koryluspilot report <plan path>` and open `/_koryluspilot/` on the dev site
+2. Mark each checklist item OK / NG with a comment, add an overall comment if needed, and save
+3. Run `koryluspilot run <plan path>` again
+
+`run` branches on the verification results of the latest version as follows.
+
+| Verification results                             | Next action                                                                                                                      |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Some items are still unverified                  | Ask for verification and finish                                                                                                  |
+| All OK and no overall comment                    | Finish the plan as verified                                                                                                      |
+| Some items are NG or there is an overall comment | Have the designer add phase fbN with `/korylus-add-feedback-phase`, run its tasks, and build the next version of the work report |
+
+Items that were OK in an earlier version are folded as verified and are not treated as unverified even if not checked again.
+
+After the phase is added, it checks that the only change to the plan is phase fbN appended to the end of the task list, and stops on any other change.
+If an added task declares a protected area, it stops before running the task.
+Review the task and approve it with `koryluspilot run <plan path> -approve` to run it.
+
+### Config file
+
+Place `koryluspilot.toml` at the project root.
+Do not put secrets in it.
+
+| Item                        | Content                                                                                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `project` / `base_branch`   | The project name (used for the hub location) and the branch the first task starts from                                                                                               |
+| `max_reviews` / `reviewers` | The maximum number of reviews per task (default 3) and the roles used for reviews in turn                                                                                            |
+| `[hub]`                     | `upstream` (the URL to fetch `base_branch` from) and `path` (the hub path as seen inside containers)                                                                                 |
+| `[usage]`                   | Caps for the 5-hour and weekly windows (default 90% and 80%), the safety factor (default 1.5), and initial consumption estimates                                                     |
+| `[roles.<role>]`            | `tool` (`claude` / `codex`), `model`, `effort`, `fix_effort`, `sandbox`, and `runner` (the prefix that starts a command in the container); `designer` and `implementer` are required |
+| `[report]`                  | `addr` (the listen address, default `127.0.0.1:4190`) and `setup` (commands listed in the work report as preparation before verification)                                            |
+| `[gate]`                    | `runner`, `commands` (commands per platform), `suppress_patterns`, `test_globs`, `generated_globs`, `size_factor`, and `watch`                                                       |
+| `[[protected]]`             | A protected area's `name` and `label`, detection methods (`paths`, `patterns`, `go_funcs_calling`, `go_import_prefix`), `on_undeclared`, and `review_points`                         |
+
+### Where state and work reports are stored
+
+| Path                                     | Content                                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tmp/koryluspilot/<plan name>/`          | Run state, snapshots of the plan and the config file, logs, and timing records                                            |
+| `docs/private/plans/files/<plan name>/`  | Work reports (`report-<version>.html` / `report-<version>.json`) and verification results (`verification-<version>.json`) |
+| `$XDG_DATA_HOME/koryluspilot/<project>/` | The hub (`hub.git`) and the per-role clones (`~/.local/share` if `XDG_DATA_HOME` is not set)                              |
+
 ## Installing and running
 
 Building requires Go, a C compiler (GCC or Clang), and `CGO_ENABLED=1`.
@@ -64,10 +267,14 @@ Each project pins a version of `koryluslint` to fetch it.
 - Go projects: pin `github.com/korylus/tools/cmd/koryluslint` with the `tool` directive in `go.mod` and run it with `go tool koryluslint ...`.
 - Non-Go projects: pin it with mise's `go:` backend.
 
+`koryluspilot` drives Docker, so run it directly on the host where Docker runs, not inside a container.
+Build it with `go build -o bin/koryluspilot ./cmd/koryluspilot`.
+
 ## Development
 
 ```sh
 make build       # build koryluslint (to bin/koryluslint)
+make install-korylusflow  # build korylusflow (to ~/.local/bin/korylusflow)
 make test        # run the tests
 make vet         # run go vet
 make lint        # run golangci-lint
