@@ -3,6 +3,7 @@ module github.com/korylus/tools
 go 1.26
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/tree-sitter/go-tree-sitter v0.25.0
 	github.com/tree-sitter/tree-sitter-bash v0.25.1
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2

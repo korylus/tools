@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>作業報告書 第{{.Version}}版: {{.Name}}</title>
+<style>
+body { font-family: sans-serif; line-height: 1.6; margin: 0 auto; max-width: 72rem; padding: 1rem; }
+table { border-collapse: collapse; margin: 0.5rem 0 1rem; }
+caption { font-weight: bold; text-align: left; }
+th, td { border: 1px solid #999; padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+pre { background: #f4f4f4; overflow-x: auto; padding: 0.5rem; white-space: pre-wrap; }
+fieldset { margin: 0.5rem 0; }
+textarea { box-sizing: border-box; width: 100%; }
+.item { border-top: 1px solid #999; margin-top: 1rem; }
+.notice { font-weight: bold; }
+</style>
+</head>
+<body>
+<main>
+<h1>作業報告書 第{{.Version}}版: {{.Name}}</h1>
+
+<section aria-labelledby="overview">
+<h2 id="overview">概要</h2>
+<table>
+<caption>概要</caption>
+<tbody>
+<tr><th scope="row">計画書</th><td><code>{{.Plan}}</code></td></tr>
+<tr><th scope="row">版</th><td>第{{.Version}}版 (作成: {{time .CreatedAt}})</td></tr>
+<tr><th scope="row">この版の期間</th><td>{{time .VersionStarted}} 〜 {{time .CreatedAt}}</td></tr>
+<tr><th scope="row">計画書の開始</th><td>{{time .Started}}</td></tr>
+{{- with .Previous}}
+<tr><th scope="row">前の版</th><td>第{{.Version}}版{{with .Comment}}<br>全体へのコメント: {{.}}{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+
+<table>
+<caption>使用量の消費 (この版の期間)</caption>
+<thead><tr><th scope="col">ツール</th><th scope="col">枠</th><th scope="col">消費 (ポイント)</th><th scope="col">記録したステップ</th></tr></thead>
+<tbody>
+{{- range .Usage}}
+<tr><td>{{.Tool}}</td><td>{{window .Window}}</td><td>{{percent .Percent}}</td><td>{{.Steps}}</td></tr>
+{{- else}}
+<tr><td colspan="4">記録なし</td></tr>
+{{- end}}
+</tbody>
+</table>
+
+<table>
+<caption>エージェントの実行 (この版の期間)</caption>
+<thead><tr><th scope="col">ツール</th><th scope="col">実行</th><th scope="col">ターン</th><th scope="col">コスト (USD)</th></tr></thead>
+<tbody>
+{{- range .Costs}}
+<tr><td>{{.Tool}}</td><td>{{.Runs}}</td><td>{{.Turns}}</td><td>{{usd .CostUSD}}</td></tr>
+{{- else}}
+<tr><td colspan="4">記録なし</td></tr>
+{{- end}}
+</tbody>
+</table>
+
+<h3>ブランチの順序</h3>
+<p>pushとPRの作成は、この順に、各ブランチの元のブランチをベースにして行ってください。</p>
+<table>
+<caption>ブランチの順序</caption>
+<thead><tr><th scope="col">タスク</th><th scope="col">ブランチ</th><th scope="col">元のブランチ</th><th scope="col">コミット</th></tr></thead>
+<tbody>
+{{- range .Branches}}
+<tr><td>{{.Task}}</td><td><code>{{.Branch}}</code></td><td><code>{{.Start}}</code></td><td><code>{{.Commit}}</code></td></tr>
+{{- end}}
+</tbody>
+</table>
+
+<h3>動作確認の前の準備</h3>
+{{- with .Preparation}}
+{{- if .Switched}}
+<p>人間のチェックアウトは、最後のブランチ <code>{{.Branch}}</code> に切り替え済みです。</p>
+{{- else}}
+<p class="notice">人間のチェックアウトに未コミットの変更があったため、ブランチを切り替えていません。変更をコミットするか退避してから、次の手順で切り替えてください。</p>
+<ol>
+{{- range .Skipped}}
+<li><code>git switch {{.Branch}} &amp;&amp; git merge --ff-only {{.Commit}}</code> (チェックアウトしていたため進めていないブランチ)</li>
+{{- end}}
+<li><code>git switch {{.Branch}}</code></li>
+</ol>
+{{- end}}
+{{- with .Setup}}
+<p>切り替えたあと、次のコマンドを実行してください。</p>
+<ol>
+{{- range .}}
+<li><code>{{.}}</code></li>
+{{- end}}
+</ol>
+{{- end}}
+{{- end}}
+</section>
+
+<section aria-labelledby="tasks">
+<h2 id="tasks">タスクごとの変更</h2>
+{{- range .Tasks}}
+<section aria-labelledby="task-{{.ID}}">
+<h3 id="task-{{.ID}}">{{.ID}}{{with .Platform}} [{{.}}]{{end}} {{.Title}}{{if .NewInVersion}} (この版で追加){{end}}</h3>
+<p>ブランチ <code>{{.Branch}}</code> (元: <code>{{.Start}}</code>、コミット: <code>{{.Commit}}</code>)</p>
+<p>実装の行数: {{.ImplLines}}行{{if .ExpectedImplLines}} (想定: {{.ExpectedImplLines}}行){{if overExpected .}} — 想定を超えています{{end}}{{else}} (想定の記載なし){{end}}</p>
+{{- with .Summary}}
+<p>実装の要約 (エージェントの構造化出力): {{.}}</p>
+{{- end}}
+<table>
+<caption>{{.ID}} の変更ファイル</caption>
+<thead><tr><th scope="col">ファイル</th><th scope="col">変更</th><th scope="col">種類</th><th scope="col">追加</th><th scope="col">削除</th></tr></thead>
+<tbody>
+{{- range .Files}}
+<tr><td><code>{{.Path}}</code>{{with .OldPath}} (元: <code>{{.}}</code>){{end}}</td><td>{{.Status}}</td><td>{{fileKind .Kind}}</td><td>{{.Added}}</td><td>{{.Removed}}</td></tr>
+{{- else}}
+<tr><td colspan="5">変更なし</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- with .Decisions}}
+<p>実装判断ログの論点:</p>
+<ul>
+{{- range .}}
+<li>{{.}}</li>
+{{- end}}
+</ul>
+{{- end}}
+{{- with .Reviews}}
+<table>
+<caption>レビュー</caption>
+<thead><tr><th scope="col">回</th><th scope="col">役割</th><th scope="col">評価</th><th scope="col">レビュードキュメント</th></tr></thead>
+<tbody>
+{{- range .}}
+<tr><td>{{.Number}}</td><td>{{.Role}}</td><td>{{.Verdict}}</td><td><code>{{.Doc}}</code></td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- else}}
+<p>レビューの記録はありません。</p>
+{{- end}}
+</section>
+{{- end}}
+</section>
+
+<section aria-labelledby="deferred">
+<h2 id="deferred">先送りした指摘</h2>
+<p>推奨どおりに「後続タスクに積む」などを選び、コードを変えなかった指摘です。後続タスクにするかは人間が決めてください。</p>
+<table>
+<caption>先送りした指摘</caption>
+<thead><tr><th scope="col">タスク</th><th scope="col">指摘</th><th scope="col">選んだ対応方針</th><th scope="col">レビュードキュメント</th></tr></thead>
+<tbody>
+{{- range .Deferred}}
+<tr><td>{{.Task}}</td><td>{{.Title}}</td><td>{{.Choice}}</td><td><code>{{.Doc}}</code></td></tr>
+{{- else}}
+<tr><td colspan="4">なし</td></tr>
+{{- end}}
+</tbody>
+</table>
+</section>
+
+<section aria-labelledby="stops">
+<h2 id="stops">止まった履歴</h2>
+<table>
+<caption>止まった履歴</caption>
+<thead><tr><th scope="col">止まった時刻</th><th scope="col">場所</th><th scope="col">理由</th><th scope="col">解消に使う役割</th><th scope="col">再開した時刻</th></tr></thead>
+<tbody>
+{{- range .Stops}}
+<tr><td>{{time .At}}</td><td>{{with .Task}}タスク {{.}} の{{end}}{{.Step}}</td><td>{{.Reason}}{{with .Details}}<ul>{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}</td><td>{{.Role}}</td><td>{{time .ResumedAt}}</td></tr>
+{{- else}}
+<tr><td colspan="5">なし</td></tr>
+{{- end}}
+</tbody>
+</table>
+</section>
+
+<section aria-labelledby="timing">
+<h2 id="timing">所要時間</h2>
+<p>この版の合計: {{duration .Timing.VersionTotal}} / 版をまたいだ合計: {{duration .Timing.Total}}</p>
+<table>
+<caption>種類・役割ごとの合計</caption>
+<thead><tr><th scope="col">種類</th><th scope="col">役割</th><th scope="col">件数 (この版)</th><th scope="col">この版</th><th scope="col">版をまたいだ合計</th></tr></thead>
+<tbody>
+{{- range .Timing.Rows}}
+<tr><td>{{eventKind .Kind}}</td><td>{{.Role}}</td><td>{{.Count}}</td><td>{{duration .Version}}</td><td>{{duration .Total}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+<table>
+<caption>タスクごとの内訳</caption>
+<thead><tr><th scope="col">タスク</th><th scope="col">エージェント</th><th scope="col">ゲート</th><th scope="col">使用量の待機</th><th scope="col">人間の待ち</th><th scope="col">差し戻し</th><th scope="col">レビュー</th></tr></thead>
+<tbody>
+{{- range .Timing.Tasks}}
+<tr><td>{{.Task}}</td><td>{{duration .Agent}}</td><td>{{duration .Gate}}</td><td>{{duration .UsageWait}}</td><td>{{duration .HumanWait}}</td><td>{{.Reworks}}回</td><td>{{.Reviews}}回</td></tr>
+{{- end}}
+</tbody>
+</table>
+</section>
+
+<section aria-labelledby="protected">
+<h2 id="protected">保護領域の変更</h2>
+{{- with .Protected.Undeclared}}
+<h3>宣言の無い変更</h3>
+<p class="notice">タスクで宣言していない保護領域に触れ、設定 (on_undeclared = "report") により止めずに進めた変更です。</p>
+<ul>
+{{- range .}}
+<li>タスク {{.Task}}: {{.Area}} ({{.Label}}){{template "hits" .Hits}}</li>
+{{- end}}
+</ul>
+{{- end}}
+{{- with .Protected.Constraints}}
+<h3>合意済みの設計制約 (計画書)</h3>
+<pre>{{.}}</pre>
+{{- end}}
+{{- range .Protected.Areas}}
+<section aria-labelledby="area-{{.Name}}">
+<h3 id="area-{{.Name}}">{{.Name}} ({{.Label}})</h3>
+<p>確認項目: <a href="#item-{{$.ItemNumber .Item}}">#{{$.ItemNumber .Item}}</a></p>
+<p>合意した設計 (宣言):</p>
+<ul>
+{{- range .Declarations}}
+<li>タスク {{.Task}}{{with .Note}}: {{.}}{{end}}</li>
+{{- else}}
+<li>どのタスクも宣言していません</li>
+{{- end}}
+</ul>
+<p>最終的な差分 (ベースブランチから最後のブランチまで):</p>
+{{- template "hits" .Final}}
+{{- range .Tasks}}
+<h4>タスク {{.Task}}{{if not .Declared}} (宣言なし){{end}}</h4>
+<p>差分:</p>
+{{- template "hits" .Hits}}
+<p>変更の説明 (エージェントの自己申告):</p>
+<ul>
+{{- range .Changes}}
+<li>{{.Step}} ({{.Role}}): {{.Summary}} — 理由: {{.Reason}}</li>
+{{- else}}
+<li>なし</li>
+{{- end}}
+</ul>
+<p>レビュアーの照合 (最後のレビュー):</p>
+<ul>
+{{- range .Checks}}
+<li>{{checkResult .Result}} ({{.Role}}) {{.Point}}: {{.Detail}}</li>
+{{- else}}
+<li>なし</li>
+{{- end}}
+</ul>
+{{- end}}
+</section>
+{{- else}}
+<p>保護領域への変更はありません。</p>
+{{- end}}
+</section>
+
+<section aria-labelledby="checklist">
+<h2 id="checklist">動作確認チェックリスト</h2>
+{{- if not .SavedAt.IsZero}}
+<p>最後に保存した時刻: {{time .SavedAt}}</p>
+{{- end}}
+<form method="post">
+<input type="hidden" name="version" value="{{.Version}}">
+{{- range .Pending}}
+{{- template "item" (withResult $ .)}}
+{{- end}}
+{{- with .Confirmed}}
+<details>
+<summary>前の版までに確認済みの項目 ({{len .}}件)</summary>
+{{- range .}}
+{{- template "item" (withResult $ .)}}
+{{- end}}
+</details>
+{{- end}}
+<div class="item">
+<label for="overall">全体へのコメント (チェックリストに無い気づき)</label>
+<textarea id="overall" name="overall" rows="4">{{.Comment}}</textarea>
+</div>
+<p><button type="submit">確認結果を保存する</button></p>
+</form>
+</section>
+</main>
+</body>
+</html>
+{{- define "hits"}}
+{{- if .}}
+<ul>
+{{- range .}}
+<li>{{if .Edge}}新しい依存: <code>{{.Edge}}</code>{{else}}<code>{{.Path}}{{if .Line}}:{{.Line}}{{end}}</code>{{if .Removed}} (削除行){{end}}{{with .Func}} 関数 {{.}}{{end}}{{with .Text}}: <code>{{.}}</code>{{end}}{{end}}</li>
+{{- end}}
+</ul>
+{{- else}}
+<p>当たった箇所はありません。</p>
+{{- end}}
+{{- end}}
+{{- define "item"}}
+{{- $it := .Item}}
+<div class="item" id="item-{{$it.Number}}">
+<h3>#{{$it.Number}} {{$it.Title}}</h3>
+<p>種類: {{itemKind $it.Kind}}{{with $it.Tasks}} / 対象タスク: {{join . ", "}}{{end}}</p>
+{{- if $it.Target}}
+{{- if eq $it.Kind "screen"}}
+<p>URL: <a href="{{$it.Target}}">{{$it.Target}}</a></p>
+{{- else}}
+<p>コマンド: <code>{{$it.Target}}</code></p>
+{{- end}}
+{{- end}}
+{{- with $it.Steps}}
+<p>手順:</p>
+<ol>
+{{- range .}}
+<li>{{.}}</li>
+{{- end}}
+</ol>
+{{- end}}
+<p>期待する結果: {{$it.Expected}}</p>
+{{- with $it.Previous}}
+<p>前の版 (#{{.Number}}) の結果: {{statusLabel .Status}}{{with .Comment}} — コメント: {{.}}{{end}}</p>
+{{- end}}
+{{- with $it.Feedback}}
+<p>対応したフィードバックのタスク: {{join . ", "}}</p>
+{{- end}}
+<fieldset>
+<legend>#{{$it.Number}} の確認結果</legend>
+<label><input type="radio" name="status:{{$it.ID}}" value="ok"{{if eq .Result.Status "ok"}} checked{{end}}> OK</label>
+<label><input type="radio" name="status:{{$it.ID}}" value="ng"{{if eq .Result.Status "ng"}} checked{{end}}> NG</label>
+<label><input type="radio" name="status:{{$it.ID}}" value=""{{if eq .Result.Status ""}} checked{{end}}> 未確認</label>
+</fieldset>
+<label for="comment-{{$it.Number}}">#{{$it.Number}} へのコメント</label>
+<textarea id="comment-{{$it.Number}}" name="comment:{{$it.ID}}" rows="2">{{.Result.Comment}}</textarea>
+</div>
+{{- end}}
