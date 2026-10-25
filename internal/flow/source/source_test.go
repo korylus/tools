@@ -94,8 +94,8 @@ func TestWikinoRead(t *testing.T) {
 
 	const page = "---\nwikino_title: \"計画書\"\nwikino_number: 12\n---\n\n**計画書名**: demo\n\n## タスクリスト\n"
 	const body = "**計画書名**: demo\n\n## タスクリスト\n"
-	draftArgs := []string{"draft", "get", "12", "--space=shimbaco", "--md"}
-	pageArgs := []string{"page", "get", "12", "--space=shimbaco", "--md"}
+	draftArgs := []string{"draft", "get", "12", "--host=https://wikino.app", "--space=shimbaco", "--md"}
+	pageArgs := []string{"page", "get", "12", "--host=https://wikino.app", "--space=shimbaco", "--md"}
 
 	tests := []struct {
 		name      string
@@ -131,7 +131,7 @@ func TestWikinoRead(t *testing.T) {
 		{
 			name:      "未ログインなら標準エラーを添える",
 			results:   []result{{code: 3, stderr: "ログインしてください\n"}},
-			wantErr:   []string{"ログインしていないか", "wikino auth status --space=shimbaco", "\nログインしてください"},
+			wantErr:   []string{"ログインしていないか", "wikino auth status --host=https://wikino.app --space=shimbaco", "\nログインしてください"},
 			wantCalls: [][]string{draftArgs},
 		},
 		{

@@ -102,7 +102,7 @@ type Wikino struct {
 // 実装者が付けたチェックや実装判断ログは、公開するまで下書きにしか無いためである。
 func (w *Wikino) Read(ctx context.Context) (string, error) {
 	for _, kind := range []string{"draft", "page"} {
-		out, stderr, code, err := w.Run(ctx, kind, "get", strconv.Itoa(w.Number), "--space="+w.Space, "--md")
+		out, stderr, code, err := w.Run(ctx, kind, "get", strconv.Itoa(w.Number), "--host=https://wikino.app", "--space="+w.Space, "--md")
 		if err != nil {
 			return "", err
 		}
@@ -128,7 +128,7 @@ func (w *Wikino) runError(kind string, code int, stderr []byte) error {
 	default:
 		reason = fmt.Sprintf("wikino %s get が終了コード %d で失敗しました", kind, code)
 	}
-	msg := fmt.Sprintf("計画書 %s を読めません: %s。wikino auth status --space=%s で状態を確かめてください", w.URL, reason, w.Space)
+	msg := fmt.Sprintf("計画書 %s を読めません: %s。wikino auth status --host=https://wikino.app --space=%s で状態を確かめてください", w.URL, reason, w.Space)
 	if s := strings.TrimSpace(string(stderr)); s != "" {
 		msg += "\n" + s
 	}
