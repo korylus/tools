@@ -18,6 +18,10 @@ import (
 	"github.com/korylus/tools/internal/plan"
 )
 
+// wikinoHostは、計画書のURLとして受け付け、wikinoコマンドの接続先にするホスト。
+// 受け付けたURLと別のホストのページを読まないよう、両方をこの値から作る。
+const wikinoHost = "https://wikino.app"
+
 // wikinoの終了コード。
 const (
 	wikinoExitAuth        = 3
@@ -28,7 +32,7 @@ const (
 var (
 	// rePageURLはWikinoのページのURLにマッチし、スペースとページ番号を取り出す。
 	// スペースは `-` で始まる値をフラグとして読ませないよう、先頭にハイフンを許さない。
-	rePageURL = regexp.MustCompile(`^https://wikino\.app/s/([A-Za-z0-9_][A-Za-z0-9_-]*)/pages/([0-9]+)$`)
+	rePageURL = regexp.MustCompile(`^` + regexp.QuoteMeta(wikinoHost) + `/s/([A-Za-z0-9_][A-Za-z0-9_-]*)/pages/([0-9]+)$`)
 	// reNumberはページ番号だけの指定にマッチする。
 	reNumber = regexp.MustCompile(`^[0-9]+$`)
 )
@@ -49,17 +53,17 @@ func Parse(arg string) (Source, error) {
 	if strings.Contains(arg, "://") {
 		m := rePageURL.FindStringSubmatch(arg)
 		if m == nil {
-			return nil, fmt.Errorf("計画書のURL %s を読み取れません。https://wikino.app/s/<スペース>/pages/<ページ番号> の形で指定してください", arg)
+			return nil, fmt.Errorf("計画書のURL %s を読み取れません。%s/s/<スペース>/pages/<ページ番号> の形で指定してください", arg, wikinoHost)
 		}
 		n, err := strconv.Atoi(m[2])
 		if err != nil || n <= 0 {
 			return nil, fmt.Errorf("計画書のURL %s のページ番号を読み取れません", arg)
 		}
-		return &Wikino{URL: arg, Space: m[1], Number: n, Run: execWikino}, nil
+		return &Wikino{URL: arg, Space: m[1], Number: n, Run: execRunner("wikino")}, nil
 	}
 	// korylusflowは非公開の指示書を読まず、どのスペースのページかを決められない。
 	if reNumber.MatchString(arg) {
-		return nil, fmt.Errorf("ページ番号 %s だけでは計画書を指定できません。https://wikino.app/s/<スペース>/pages/%s の形のURLで指定してください", arg, arg)
+		return nil, fmt.Errorf("ページ番号 %s だけでは計画書を指定できません。%s/s/<スペース>/pages/%s の形のURLで指定してください", arg, wikinoHost, arg)
 	}
 	return File(arg), nil
 }
@@ -102,7 +106,7 @@ type Wikino struct {
 // 実装者が付けたチェックや実装判断ログは、公開するまで下書きにしか無いためである。
 func (w *Wikino) Read(ctx context.Context) (string, error) {
 	for _, kind := range []string{"draft", "page"} {
-		out, stderr, code, err := w.Run(ctx, kind, "get", strconv.Itoa(w.Number), "--host=https://wikino.app", "--space="+w.Space, "--md")
+		out, stderr, code, err := w.Run(ctx, kind, "get", strconv.Itoa(w.Number), "--host="+wikinoHost, "--space="+w.Space, "--md")
 		if err != nil {
 			return "", err
 		}
@@ -128,7 +132,7 @@ func (w *Wikino) runError(kind string, code int, stderr []byte) error {
 	default:
 		reason = fmt.Sprintf("wikino %s get が終了コード %d で失敗しました", kind, code)
 	}
-	msg := fmt.Sprintf("計画書 %s を読めません: %s。wikino auth status --host=https://wikino.app --space=%s で状態を確かめてください", w.URL, reason, w.Space)
+	msg := fmt.Sprintf("計画書 %s を読めません: %s。wikino auth status --host=%s --space=%s で状態を確かめてください", w.URL, reason, wikinoHost, w.Space)
 	if s := strings.TrimSpace(string(stderr)); s != "" {
 		msg += "\n" + s
 	}
@@ -161,22 +165,25 @@ func stripFrontmatter(s string) (string, error) {
 	return strings.TrimPrefix(body, "\n"), nil
 }
 
-// execWikinoはwikinoコマンドを実行する。
-func execWikino(ctx context.Context, args ...string) ([]byte, []byte, int, error) {
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "wikino", args...) //#nosec G204 -- 検査したスペースとページ番号だけを、シェルを通さずに渡す
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	var exitErr *exec.ExitError
-	switch {
-	case err == nil:
-		return stdout.Bytes(), stderr.Bytes(), 0, nil
-	case errors.Is(err, exec.ErrNotFound):
-		return nil, nil, 0, errors.New("wikinoコマンドが見つかりません。Wikino CLIをインストールしてログインしてください")
-	case ctx.Err() != nil:
-		return nil, nil, 0, ctx.Err()
-	case errors.As(err, &exitErr):
-		return stdout.Bytes(), stderr.Bytes(), exitErr.ExitCode(), nil
+// execRunnerは、実行ファイルnameをwikinoコマンドとして子プロセスで呼ぶRunnerを返す。
+// テストでは、出力と終了コードを決めた実行ファイルを渡す。
+func execRunner(name string) Runner {
+	return func(ctx context.Context, args ...string) ([]byte, []byte, int, error) {
+		var stdout, stderr bytes.Buffer
+		cmd := exec.CommandContext(ctx, name, args...) //#nosec G204 -- 検査したスペースとページ番号だけを、シェルを通さずに渡す
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		var exitErr *exec.ExitError
+		switch {
+		case err == nil:
+			return stdout.Bytes(), stderr.Bytes(), 0, nil
+		case errors.Is(err, exec.ErrNotFound):
+			return nil, nil, 0, errors.New("wikinoコマンドが見つかりません。Wikino CLIをインストールしてログインしてください")
+		case ctx.Err() != nil:
+			return nil, nil, 0, ctx.Err()
+		case errors.As(err, &exitErr):
+			return stdout.Bytes(), stderr.Bytes(), exitErr.ExitCode(), nil
+		}
+		return nil, nil, 0, fmt.Errorf("wikinoコマンドを実行できません: %w", err)
 	}
-	return nil, nil, 0, fmt.Errorf("wikinoコマンドを実行できません: %w", err)
 }

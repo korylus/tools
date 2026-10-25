@@ -186,6 +186,80 @@ func TestWikinoRead(t *testing.T) {
 	}
 }
 
+func TestExecRunner(t *testing.T) {
+	t.Parallel()
+
+	// 実行の権限が無いファイルは、見つかっても起動できない。
+	noExec := filepath.Join(t.TempDir(), "wikino")
+	if err := os.WriteFile(noExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		command    string
+		args       []string
+		canceled   bool
+		wantStdout string
+		wantStderr string
+		wantCode   int
+		wantErr    string
+	}{
+		{
+			name:       "正常に終われば終了コード0と出力を返す",
+			command:    "sh",
+			args:       []string{"-c", `printf '%s,' "$@"; printf err >&2`, "sh", "draft", "get"},
+			wantStdout: "draft,get,",
+			wantStderr: "err",
+		},
+		{
+			name:       "失敗した終了コードはエラーにせずに返す",
+			command:    "sh",
+			args:       []string{"-c", "printf out; printf err >&2; exit 5"},
+			wantStdout: "out",
+			wantStderr: "err",
+			wantCode:   5,
+		},
+		{
+			name:    "コマンドが見つからない",
+			command: "korylusflow-test-no-such-command",
+			wantErr: "wikinoコマンドが見つかりません",
+		},
+		{
+			name:    "コマンドを起動できない",
+			command: noExec,
+			wantErr: "wikinoコマンドを実行できません",
+		},
+		{
+			name:     "取り消されたらctxのエラー",
+			command:  "sh",
+			args:     []string{"-c", "exit 0"},
+			canceled: true,
+			wantErr:  context.Canceled.Error(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.canceled {
+				cancel()
+			}
+			stdout, stderr, code, err := execRunner(tt.command)(ctx, tt.args...)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("エラー = %v、期待値 = %q を含むエラー", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || string(stdout) != tt.wantStdout || string(stderr) != tt.wantStderr || code != tt.wantCode {
+				t.Errorf("結果 = %q, %q, %d, %v、期待値 = %q, %q, %d, nil", stdout, stderr, code, err, tt.wantStdout, tt.wantStderr, tt.wantCode)
+			}
+		})
+	}
+}
+
 func TestWikinoName(t *testing.T) {
 	t.Parallel()
 
