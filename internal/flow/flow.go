@@ -98,7 +98,8 @@ func (f *Flow) Wait(ctx context.Context, role state.Role, timeout time.Duration)
 }
 
 // pollは状態を1回読み、役割roleの番なら指示を返す。進めているステップが無ければ、
-// 計画書から次のステップを決めて書き込む。
+// 計画書から次のステップを決めて書き込む。計画書を読むのは、次のステップを決めるとき・
+// 中断した処理を再開するとき・roleの番の指示を組み立てるときだけである。
 // lockCtxはロックを取るまでの待ちにだけ使い、ロックを取ったあとはctxで進める。
 // waitの期限で、ブランチの準備の途中のgitを止めないためである。
 func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction, bool, error) {
@@ -111,6 +112,11 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	st, err := f.load()
 	if err != nil {
 		return Instruction{}, false, err
+	}
+	// 進めているステップの番がほかの役割なら、状態だけで判断できる。待っている間に
+	// 計画書を読み直し続けないよう、計画書を読まずに戻る。
+	if st.Pending == nil && st.Task != "" && st.Role != role {
+		return Instruction{}, false, nil
 	}
 	p, err := f.readPlan()
 	if err != nil {
