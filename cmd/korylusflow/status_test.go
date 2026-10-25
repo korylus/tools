@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestStatusNotStarted(t *testing.T) {
 
 	planPath := writePlan(t)
 	var stdout, stderr bytes.Buffer
-	if code := status([]string{planPath}, t.TempDir(), time.Now(), &stdout, &stderr); code != exitOK {
+	if code := status(context.Background(), []string{planPath}, t.TempDir(), time.Now(), &stdout, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 	}
 	assertContains(t, stdout.String(),
@@ -74,7 +75,7 @@ func TestStatusPendingCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := status([]string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+	if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 	}
 	assertContains(t, stdout.String(), "状態: タスク 2-1 の実装の完了を記録中 (waitかdoneで再開できます)")
@@ -116,7 +117,7 @@ func TestStatusWaitingForHuman(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := status([]string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+	if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 	}
 	assertContains(t, stdout.String(),
@@ -179,7 +180,7 @@ func TestStatusErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var stdout, stderr bytes.Buffer
-			if code := status(tt.args(t), t.TempDir(), time.Now(), &stdout, &stderr); code != exitError {
+			if code := status(context.Background(), tt.args(t), t.TempDir(), time.Now(), &stdout, &stderr); code != exitError {
 				t.Errorf("終了コード = %d、期待値 = %d", code, exitError)
 			}
 			assertContains(t, stderr.String(), tt.wantStderr)

@@ -20,14 +20,14 @@ func report(ctx context.Context, args []string, stateRoot string, stdout, stderr
 	flags := flag.NewFlagSet("report", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "使い方: korylusflow report <計画書のパス>")
+		fmt.Fprintln(stderr, "使い方: korylusflow report <計画書>")
 	}
 	planPath, err := parsePlanArgs(flags, args)
 	if err != nil {
 		return parseFailed(flags, err)
 	}
 
-	f, err := flow.New(planPath, stateRoot)
+	f, err := flow.New(ctx, planPath, stateRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError

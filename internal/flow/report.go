@@ -47,7 +47,7 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 	if hasNewEvents(st, events) {
 		v++
 	}
-	doc, err := f.readPlan()
+	doc, err := f.readPlan(ctx)
 	if err != nil {
 		return "", err
 	}

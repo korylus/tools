@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-23 -->
+<!-- last_synced: 2026-10-25 -->
 
 # korylus-tools
 
@@ -64,13 +64,14 @@ Only `korylusflow` decides what happens next; agents never decide it.
 ### Usage
 
 ```sh
-korylusflow wait <plan path> -role=<role> [-timeout=<duration>]
-korylusflow done <plan path> -role=<role>
-korylusflow status <plan path>
-korylusflow report <plan path>
+korylusflow wait <plan> -role=<role> [-timeout=<duration>]
+korylusflow done <plan> -role=<role>
+korylusflow status <plan>
+korylusflow report <plan>
 ```
 
-Run every subcommand at the project root and give the plan path relative to that root.
+Run every subcommand at the project root.
+Specify the plan by its path relative to that root or by the URL of a Wikino page (`https://wikino.app/s/<space>/pages/<page number>`) (see "[Plan names and plans on Wikino pages](#plan-names-and-plans-on-wikino-pages)").
 The role is one of `implementer`, `reviewer-codex` (reviewer (Codex)), and `reviewer-claude` (reviewer (Claude Code)).
 
 | Subcommand | Role                                                                                                                                                                   |
@@ -91,6 +92,26 @@ This lets a session continue from the latest instruction alone, even after its c
 | 0         | It recorded the completion                                                                               |
 | 1         | Error                                                                                                    |
 | 2         | It did not accept the record because a completion condition is not met (fix it per the reason and retry) |
+
+### Plan names and plans on Wikino pages
+
+The plan name is used for the state location, branch names, and the heading of work reports.
+Write it before the first `## ` heading of the plan, on a line of the following form.
+Use only lowercase letters, digits, and hyphens between them in the value.
+
+```markdown
+**計画書名**: feature-name
+```
+
+For a plan in a file, omitting this line makes it use the file name (without the extension).
+When you write the line, use the same value as the file name.
+For a plan on a Wikino page, this line is required.
+Changing the plan name in the middle of the loop moves the state location, and the loop can no longer continue from where it left off.
+
+A plan on a Wikino page is read with the `wikino` command of the [Wikino CLI](https://github.com/wikinoapp/wikino/tree/main/cli): its draft if there is one, otherwise the page.
+This is because the checks and the implementation decision log written by the implementer exist only in the draft until it is published.
+`korylusflow` never writes to Wikino, so the token you log in with via `wikino auth login <space>` only needs read permissions.
+When the plan cannot be read, for example because you are not logged in or hit the rate limit, it ends with an error without changing the state.
 
 ### Flow of a task
 

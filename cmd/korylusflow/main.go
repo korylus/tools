@@ -1,10 +1,10 @@
 // Command korylusflowは、作業計画書のタスクを役割ごとの対話セッションで進めるときに、
 // 番と次の指示を決めて状態を記録するCLI。
 //
-//	korylusflow wait <計画書のパス> -role=<役割>  役割の番まで待ち、次の指示を返す
-//	korylusflow done <計画書のパス> -role=<役割>  進めているステップの完了を記録する
-//	korylusflow status <計画書のパス>              計画書の進行状況と、人を待っている理由を表示する
-//	korylusflow report <計画書のパス>              作業報告書の最新の版を作り直す
+//	korylusflow wait <計画書> -role=<役割>  役割の番まで待ち、次の指示を返す
+//	korylusflow done <計画書> -role=<役割>  進めているステップの完了を記録する
+//	korylusflow status <計画書>              計画書の進行状況と、人を待っている理由を表示する
+//	korylusflow report <計画書>              作業報告書の最新の版を作り直す
 //
 // 各サブコマンドの本体はinternal/flow/配下のパッケージに置き、本ファイルと
 // 同じパッケージのファイルはサブコマンドのディスパッチと入出力・終了コードのみを担う。
@@ -30,11 +30,12 @@ const (
 const usageText = `korylusflow - 作業計画書のタスクを役割ごとのセッションで進めるための状態管理CLI
 
 使い方:
-  korylusflow wait <計画書のパス> -role=<役割> [-timeout=<時間>]
-  korylusflow done <計画書のパス> -role=<役割>
-  korylusflow status <計画書のパス>
-  korylusflow report <計画書のパス>
+  korylusflow wait <計画書> -role=<役割> [-timeout=<時間>]
+  korylusflow done <計画書> -role=<役割>
+  korylusflow status <計画書>
+  korylusflow report <計画書>
 
+計画書: プロジェクトのルートからの相対パスか、WikinoのページのURL (https://wikino.app/s/<スペース>/pages/<ページ番号>)
 役割: implementer / reviewer-codex / reviewer-claude
 
 サブコマンド:

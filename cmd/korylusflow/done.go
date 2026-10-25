@@ -24,7 +24,7 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 	flags.SetOutput(stderr)
 	roleFlag := flags.String("role", "", "役割 (implementer / reviewer-codex / reviewer-claude)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書のパス> -role=<役割> [< 動作確認の項目のJSON]")
+		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書> -role=<役割> [< 動作確認の項目のJSON]")
 		flags.PrintDefaults()
 	}
 	planPath, err := parsePlanArgs(flags, args)
@@ -37,7 +37,7 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 		return exitError
 	}
 
-	f, err := flow.New(planPath, stateRoot)
+	f, err := flow.New(ctx, planPath, stateRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError
