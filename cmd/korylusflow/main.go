@@ -85,12 +85,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return sub(rest, stdout, stderr)
 }
 
-// errUsageは、計画書のパスが無い・多いなど、引数の数が合わないときのエラー。
+// errUsageは、計画書の指定が無い・多いなど、引数の数が合わないときのエラー。
 var errUsage = errors.New("引数の数が合いません")
 
-// parsePlanArgsは、計画書のパスを1つ取るサブコマンドの引数を読み、計画書のパスを返す。
-// flagパッケージは最初のフラグでない引数で読むのをやめるため、計画書のパスの後ろに
-// フラグを書く形 (wait <計画書> -role=...) も受け付けるよう、パスの前後で2回読む。
+// parsePlanArgsは、計画書の指定を1つ取るサブコマンドの引数を読み、計画書の指定を返す。
+// flagパッケージは最初のフラグでない引数で読むのをやめるため、計画書の指定の後ろに
+// フラグを書く形 (wait <計画書> -role=...) も受け付けるよう、指定の前後で2回読む。
 func parsePlanArgs(flags *flag.FlagSet, args []string) (string, error) {
 	if err := flags.Parse(args); err != nil {
 		return "", err

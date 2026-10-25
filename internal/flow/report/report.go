@@ -34,7 +34,7 @@ var partOrder = []string{"実装", "テスト"}
 
 // Inputは作業報告書1版を組み立てる入力。
 type Input struct {
-	// PlanPathは計画書の、プロジェクトのルートからの相対パス。
+	// PlanPathは計画書の指定 (プロジェクトのルートからの相対パスか、WikinoのページのURL)。
 	PlanPath string
 	// Nameは計画書名。見出しに使う。
 	Name string
