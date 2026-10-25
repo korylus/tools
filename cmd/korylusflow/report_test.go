@@ -47,7 +47,7 @@ func TestReport(t *testing.T) {
 		assertContains(t, string(out), "# 作業報告書 第1版: korylusflow", "| 2-2 | 実装者 | 人が行うタスクです |")
 
 		stdout.Reset()
-		if code := status([]string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+		if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
 			t.Fatalf("statusの終了コード = %d、標準エラー = %s", code, stderr.String())
 		}
 		assertContains(t, stdout.String(), "作業報告書: 第1版 ("+dir.ReportPath(1)+")")

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korylus/tools/internal/flow/source"
 	"github.com/korylus/tools/internal/flow/state"
 )
 
@@ -68,15 +69,19 @@ func newFixture(t *testing.T, tasks ...string) fixture {
 	if err := os.WriteFile(planPath, []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fx := fixture{repo: repo, flow: New(planPath, t.TempDir())}
-	fx.reopen()
+	fx := fixture{repo: repo, flow: &Flow{PlanPath: planPath, Dir: state.NewDir(t.TempDir(), "demo")}}
+	fx.reopen(t)
 	return fx
 }
 
 // reopenは、同じ計画書と状態ディレクトリで新しいFlowを作り直す。リポジトリを
 // プロジェクトのルート (本体) として扱い、レビュードキュメントもその下に置く。
-func (fx *fixture) reopen() {
-	f := New(fx.flow.PlanPath, filepath.Dir(fx.flow.Dir.Path()))
+func (fx *fixture) reopen(t *testing.T) {
+	t.Helper()
+	f, err := New(context.Background(), fx.flow.PlanPath, filepath.Dir(fx.flow.Dir.Path()))
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.Root = fx.repo
 	f.PollInterval = 10 * time.Millisecond
 	fx.flow = f
@@ -470,5 +475,105 @@ func TestParseVerification(t *testing.T) {
 				t.Errorf("parseVerification() = %d件, %v、期待値 = %d件", len(items), err, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, head, wantName, wantErr string
+	}{
+		{name: "行が無ければファイル名を使う", wantName: "demo"},
+		{name: "行がファイル名と同じなら使う", head: "**計画書名**: demo\n\n", wantName: "demo"},
+		{name: "行がファイル名と違えばエラー", head: "**計画書名**: other\n\n", wantErr: "計画書名 other がファイル名 demo と違います"},
+		{name: "計画書を読み取れなければエラー", head: "**計画書名**: Demo\n\n", wantErr: "を読み取れません"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			planPath := filepath.Join(t.TempDir(), "demo.md")
+			writeFile(t, filepath.Dir(planPath), "demo.md", tt.head+"## タスクリスト\n\n- [ ] **1-1**: [shimbaco] 人のタスク\n")
+			stateRoot := t.TempDir()
+			f, err := New(context.Background(), planPath, stateRoot)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("Newのエラー = %v、期待値 = %q を含むエラー", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Newのエラー = %v", err)
+			}
+			if f.Name != tt.wantName || f.Dir.Path() != filepath.Join(stateRoot, tt.wantName) {
+				t.Errorf("計画書名 = %q、状態の置き場 = %q、期待値 = %q", f.Name, f.Dir.Path(), tt.wantName)
+			}
+		})
+	}
+}
+
+func TestFlowWikinoPlan(t *testing.T) {
+	t.Parallel()
+
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "init", "--quiet", "--initial-branch=main")
+	commit(t, repo, "README.md")
+	body := "**計画書名**: wiki-demo\n\n## タスクリスト\n\n- [ ] **1-1**: [" + repo + "] タスク\n"
+
+	// 下書きの本文を返す。読んだ回数を数え、番でない役割が読まないことを確かめる。
+	var reads int
+	const url = "https://wikino.app/s/shimbaco/pages/12"
+	src := &source.Wikino{URL: url, Space: "shimbaco", Number: 12, Run: func(_ context.Context, args ...string) ([]byte, []byte, int, error) {
+		reads++
+		return []byte("---\nwikino_number: 12\n---\n\n" + body), nil, 0, nil
+	}}
+	stateRoot := t.TempDir()
+	f, err := open(context.Background(), src, stateRoot)
+	if err != nil {
+		t.Fatalf("openのエラー = %v", err)
+	}
+	f.Root, f.PollInterval = repo, 10*time.Millisecond
+	if f.Name != "wiki-demo" || f.Dir.Path() != filepath.Join(stateRoot, "wiki-demo") {
+		t.Errorf("計画書名 = %q、状態の置き場 = %q", f.Name, f.Dir.Path())
+	}
+
+	in, err := f.Wait(context.Background(), state.RoleImplementer, time.Second)
+	if err != nil || in.Action != ActionImplement || in.Title != "タスク" {
+		t.Fatalf("Wait = %+v, %v、期待値 = タスク1-1の実装", in, err)
+	}
+	if in.Record.Branch != "wiki-demo-1-1" {
+		t.Errorf("ブランチ = %q、期待値 = wiki-demo-1-1", in.Record.Branch)
+	}
+	text := in.String()
+	for _, want := range []string{
+		"plan: " + url + "\n",
+		"/korylus-do-plan-task " + url + " 1-1 repo=",
+		"korylusflow done " + url + " -role=implementer",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("指示に %q が無い:\n%s", want, text)
+		}
+	}
+
+	before := reads
+	if in, err := f.Wait(context.Background(), state.RoleReviewerCodex, 50*time.Millisecond); err != nil || in.Action != ActionWait {
+		t.Errorf("レビュアーのWait = %+v, %v、期待値 = action: wait", in, err)
+	}
+	if reads != before {
+		t.Errorf("番でない役割のWaitで計画書を %d 回読んだ", reads-before)
+	}
+}
+
+func TestNewWikinoWithoutName(t *testing.T) {
+	t.Parallel()
+
+	src := &source.Wikino{URL: "https://wikino.app/s/shimbaco/pages/12", Space: "shimbaco", Number: 12, Run: func(context.Context, ...string) ([]byte, []byte, int, error) {
+		return []byte("## タスクリスト\n\n- [ ] **1-1**: [shimbaco] 人のタスク\n"), nil, 0, nil
+	}}
+	if _, err := open(context.Background(), src, t.TempDir()); err == nil || !strings.Contains(err.Error(), "計画書名の行がありません") {
+		t.Errorf("openのエラー = %v、期待値 = 計画書名の行が無いエラー", err)
 	}
 }

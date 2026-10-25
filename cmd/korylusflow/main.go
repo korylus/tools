@@ -1,10 +1,10 @@
 // Command korylusflowは、作業計画書のタスクを役割ごとの対話セッションで進めるときに、
 // 番と次の指示を決めて状態を記録するCLI。
 //
-//	korylusflow wait <計画書のパス> -role=<役割>  役割の番まで待ち、次の指示を返す
-//	korylusflow done <計画書のパス> -role=<役割>  進めているステップの完了を記録する
-//	korylusflow status <計画書のパス>              計画書の進行状況と、人を待っている理由を表示する
-//	korylusflow report <計画書のパス>              作業報告書の最新の版を作り直す
+//	korylusflow wait <計画書> -role=<役割>  役割の番まで待ち、次の指示を返す
+//	korylusflow done <計画書> -role=<役割>  進めているステップの完了を記録する
+//	korylusflow status <計画書>              計画書の進行状況と、人を待っている理由を表示する
+//	korylusflow report <計画書>              作業報告書の最新の版を作り直す
 //
 // 各サブコマンドの本体はinternal/flow/配下のパッケージに置き、本ファイルと
 // 同じパッケージのファイルはサブコマンドのディスパッチと入出力・終了コードのみを担う。
@@ -30,11 +30,12 @@ const (
 const usageText = `korylusflow - 作業計画書のタスクを役割ごとのセッションで進めるための状態管理CLI
 
 使い方:
-  korylusflow wait <計画書のパス> -role=<役割> [-timeout=<時間>]
-  korylusflow done <計画書のパス> -role=<役割>
-  korylusflow status <計画書のパス>
-  korylusflow report <計画書のパス>
+  korylusflow wait <計画書> -role=<役割> [-timeout=<時間>]
+  korylusflow done <計画書> -role=<役割>
+  korylusflow status <計画書>
+  korylusflow report <計画書>
 
+計画書: プロジェクトのルートからの相対パスか、WikinoのページのURL (https://wikino.app/s/<スペース>/pages/<ページ番号>)
 役割: implementer / reviewer-codex / reviewer-claude
 
 サブコマンド:
@@ -84,12 +85,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return sub(rest, stdout, stderr)
 }
 
-// errUsageは、計画書のパスが無い・多いなど、引数の数が合わないときのエラー。
+// errUsageは、計画書の指定が無い・多いなど、引数の数が合わないときのエラー。
 var errUsage = errors.New("引数の数が合いません")
 
-// parsePlanArgsは、計画書のパスを1つ取るサブコマンドの引数を読み、計画書のパスを返す。
-// flagパッケージは最初のフラグでない引数で読むのをやめるため、計画書のパスの後ろに
-// フラグを書く形 (wait <計画書> -role=...) も受け付けるよう、パスの前後で2回読む。
+// parsePlanArgsは、計画書の指定を1つ取るサブコマンドの引数を読み、計画書の指定を返す。
+// flagパッケージは最初のフラグでない引数で読むのをやめるため、計画書の指定の後ろに
+// フラグを書く形 (wait <計画書> -role=...) も受け付けるよう、指定の前後で2回読む。
 func parsePlanArgs(flags *flag.FlagSet, args []string) (string, error) {
 	if err := flags.Parse(args); err != nil {
 		return "", err

@@ -213,11 +213,69 @@ func TestPlanProgress(t *testing.T) {
 	}
 }
 
-func TestName(t *testing.T) {
+func TestParse_Name(t *testing.T) {
 	t.Parallel()
+	const tasks = "## タスクリスト\n\n- [ ] **1-1**: タスク\n"
+	tests := []struct {
+		name, head, want string
+	}{
+		{"行が無い", "# 計画書\n\n", ""},
+		{"行の値を読む", "# 計画書\n\n**計画書名**: doc-with-wikino\n\n", "doc-with-wikino"},
+		{"HTMLコメントの中は読まない", "# 計画書\n\n<!--\n**計画書名**: example\n-->\n\n", ""},
+		{"コードブロックの中は読まない", "# 計画書\n\n```markdown\n**計画書名**: example\n```\n\n", ""},
+		{"最初の節より後ろは読まない", "# 計画書\n\n## 概要\n\n**計画書名**: example\n\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p, err := Parse(tt.head + tasks)
+			if err != nil {
+				t.Fatalf("Parse() のエラー = %v", err)
+			}
+			if p.Name != tt.want {
+				t.Errorf("Name = %q、期待値 = %q", p.Name, tt.want)
+			}
+		})
+	}
+}
 
-	if got := Name("docs/private/plans/1_doing/koryluspilot.md"); got != "koryluspilot" {
-		t.Errorf("Name() = %q、期待値 = %q", got, "koryluspilot")
+func TestParse_NameErrors(t *testing.T) {
+	t.Parallel()
+	const tasks = "## タスクリスト\n\n- [ ] **1-1**: タスク\n"
+	tests := []struct {
+		name, head, want string
+	}{
+		{"英大文字", "**計画書名**: Doc\n", "1行目: 計画書名 \"Doc\" には"},
+		{"両端のハイフン", "**計画書名**: -doc\n", "計画書名 \"-doc\" には"},
+		{"続くハイフン", "**計画書名**: doc--wikino\n", "計画書名 \"doc--wikino\" には"},
+		{"空の値", "**計画書名**:\n", "計画書名 \"\" には"},
+		{"重複", "**計画書名**: doc\n**計画書名**: doc\n", "2行目: 計画書名の行が重複しています (1行目と同じ)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(tt.head + "\n" + tasks)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Parse() のエラー = %v、期待値 = %q を含むエラー", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestFileName(t *testing.T) {
+	t.Parallel()
+	const path = "docs/private/plans/1_doing/koryluspilot.md"
+
+	for _, name := range []string{"", "koryluspilot"} {
+		got, err := FileName(path, &Plan{Name: name})
+		if err != nil || got != "koryluspilot" {
+			t.Errorf("計画書名の行 %q のFileName() = %q, %v、期待値 = %q", name, got, err, "koryluspilot")
+		}
+	}
+
+	_, err := FileName(path, &Plan{Name: "other"})
+	if err == nil || !strings.Contains(err.Error(), "計画書名 other がファイル名 koryluspilot と違います") {
+		t.Errorf("食い違うときのFileName() のエラー = %v", err)
 	}
 }
 

@@ -28,7 +28,7 @@ func wait(ctx context.Context, args []string, stateRoot string, stdout, stderr i
 	roleFlag := flags.String("role", "", "役割 (implementer / reviewer-codex / reviewer-claude)")
 	timeout := flags.Duration("timeout", 0, "この時間を過ぎても番が来なければ action: wait を返す (0なら番が来るまで待つ)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "使い方: korylusflow wait <計画書のパス> -role=<役割> [-timeout=<時間>]")
+		fmt.Fprintln(stderr, "使い方: korylusflow wait <計画書> -role=<役割> [-timeout=<時間>]")
 		flags.PrintDefaults()
 	}
 	planPath, err := parsePlanArgs(flags, args)
@@ -41,7 +41,12 @@ func wait(ctx context.Context, args []string, stateRoot string, stdout, stderr i
 		return exitError
 	}
 
-	in, err := flow.New(planPath, stateRoot).Wait(ctx, role, *timeout)
+	f, err := flow.New(ctx, planPath, stateRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "エラー: %v\n", err)
+		return exitError
+	}
+	in, err := f.Wait(ctx, role, *timeout)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(stderr, "中断しました")

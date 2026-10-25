@@ -64,7 +64,7 @@ func TestFlowResumeAfterSaveFailure(t *testing.T) {
 			}
 
 			// 新しいFlowでも、完了条件を確かめ直さずに復帰できる。
-			fx.reopen()
+			fx.reopen(t)
 			if viaWait {
 				in := fx.wait(t, state.RoleImplementer)
 				if in.Action != ActionImplement || in.Task != "1-2" {
@@ -130,7 +130,7 @@ func TestFlowResumeAfterEventFailure(t *testing.T) {
 	if err := os.Rename(timeline+".saved", timeline); err != nil {
 		t.Fatal(err)
 	}
-	fx.reopen()
+	fx.reopen(t)
 	if in := fx.wait(t, state.RoleReviewerClaude); in.Action != ActionFinish {
 		t.Fatalf("再開後の指示 = %+v、終了を期待", in)
 	}
@@ -167,7 +167,7 @@ func TestFlowResumeBranchAsk(t *testing.T) {
 	if err := os.Remove(timeline); err != nil {
 		t.Fatal(err)
 	}
-	fx.reopen()
+	fx.reopen(t)
 	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionImplement || in.Task != "1-1" {
 		t.Fatalf("再開後の指示 = %+v、タスク1-1の実装を期待", in)
 	}

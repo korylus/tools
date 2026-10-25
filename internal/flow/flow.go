@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/korylus/tools/internal/flow/branch"
+	"github.com/korylus/tools/internal/flow/source"
 	"github.com/korylus/tools/internal/flow/state"
 	"github.com/korylus/tools/internal/plan"
 )
@@ -47,8 +47,13 @@ func reject(format string, args ...any) error {
 
 // Flowは1つの計画書の状態遷移。
 type Flow struct {
-	// PlanPathはプロジェクトのルートからの計画書のパス。指示の中のコマンドにもそのまま使う。
+	// PlanPathは計画書の指定 (プロジェクトのルートからのパスか、WikinoのページのURL)。
+	// 指示の中のコマンドにもそのまま使う。
 	PlanPath string
+	// Sourceは計画書の読み取り元。
+	Source source.Source
+	// Nameは計画書名。状態の置き場・ブランチ名・作業報告書の見出しに使う。
+	Name string
 	// Rootはプロジェクトのルート。レビュードキュメントの置き場所と、本体のリポジトリを
 	// 求めるのに使う。
 	Root string
@@ -58,16 +63,36 @@ type Flow struct {
 	PollInterval time.Duration
 }
 
-// Newは計画書planPathの状態遷移を、stateRootの下の状態ディレクトリで扱うFlowを返す。
-// プロジェクトのルートは作業ディレクトリとする。
-func New(planPath, stateRoot string) *Flow {
+// Newは計画書の指定planArg (パスかURL) の状態遷移を、stateRootの下の状態ディレクトリで
+// 扱うFlowを返す。プロジェクトのルートは作業ディレクトリとする。
+func New(ctx context.Context, planArg, stateRoot string) (*Flow, error) {
+	src, err := source.Parse(planArg)
+	if err != nil {
+		return nil, err
+	}
+	return open(ctx, src, stateRoot)
+}
+
+// openは読み取り元srcの計画書の状態遷移を扱うFlowを返す。状態の置き場を計画書名で
+// 決めるため、計画書を1回読む。
+func open(ctx context.Context, src source.Source, stateRoot string) (*Flow, error) {
+	doc, err := readPlan(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+	name, err := src.Name(doc.Plan)
+	if err != nil {
+		return nil, err
+	}
 	return &Flow{
-		PlanPath:     planPath,
+		PlanPath:     src.String(),
+		Source:       src,
+		Name:         name,
 		Root:         ".",
-		Dir:          state.NewDir(stateRoot, plan.Name(planPath)),
+		Dir:          state.NewDir(stateRoot, name),
 		Now:          time.Now,
 		PollInterval: defaultPollInterval,
-	}
+	}, nil
 }
 
 // Waitは役割roleの番が来るまで待ち、次の指示を返す。timeoutが正で、それを過ぎても
@@ -98,7 +123,8 @@ func (f *Flow) Wait(ctx context.Context, role state.Role, timeout time.Duration)
 }
 
 // pollは状態を1回読み、役割roleの番なら指示を返す。進めているステップが無ければ、
-// 計画書から次のステップを決めて書き込む。
+// 計画書から次のステップを決めて書き込む。計画書を読むのは、次のステップを決めるとき・
+// 中断した処理を再開するとき・roleの番の指示を組み立てるときだけである。
 // lockCtxはロックを取るまでの待ちにだけ使い、ロックを取ったあとはctxで進める。
 // waitの期限で、ブランチの準備の途中のgitを止めないためである。
 func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction, bool, error) {
@@ -112,21 +138,26 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	if err != nil {
 		return Instruction{}, false, err
 	}
-	p, err := f.readPlan()
+	// 進めているステップの番がほかの役割なら、状態だけで判断できる。待っている間に
+	// 計画書を読み直し続けないよう、計画書を読まずに戻る。
+	if st.Pending == nil && st.Task != "" && st.Role != role {
+		return Instruction{}, false, nil
+	}
+	doc, err := f.readPlan(ctx)
 	if err != nil {
 		return Instruction{}, false, err
 	}
 	if st.Pending != nil {
-		if err := f.resume(ctx, st, p); err != nil {
+		if err := f.resume(ctx, st, doc); err != nil {
 			return Instruction{}, false, err
 		}
 	} else if st.Task == "" {
-		f.advance(ctx, st, p)
+		f.advance(ctx, st, doc.Plan)
 		if err := ctx.Err(); err != nil {
 			return Instruction{}, false, err
 		}
 		if st.Task == "" {
-			if err := f.finishPlan(ctx, st); err != nil {
+			if err := f.finishPlan(ctx, st, doc); err != nil {
 				return Instruction{}, false, err
 			}
 		}
@@ -142,7 +173,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 		return Instruction{}, false, nil
 	}
 	in := Instruction{Role: role, PlanPath: f.PlanPath, Task: st.Task, Record: st.TaskRecord(st.Task), Ask: st.Ask}
-	if t, ok := findTask(p, st.Task); ok {
+	if t, ok := findTask(doc.Plan, st.Task); ok {
 		in.Title = t.Title
 	}
 	if rec := in.Record; rec != nil && len(rec.Reviews) > 0 {
@@ -187,11 +218,11 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 		if st.Pending.Role != role {
 			return "", reject("%s の番ではありません (完了の記録は %s の番です)", role, st.Pending.Role)
 		}
-		p, err := f.readPlan()
+		doc, err := f.readPlan(ctx)
 		if err != nil {
 			return "", err
 		}
-		if err := f.resume(ctx, st, p); err != nil {
+		if err := f.resume(ctx, st, doc); err != nil {
 			return "", err
 		}
 		return f.completionMessage(st), nil
@@ -202,7 +233,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	if st.Role != role {
 		return "", reject("%s の番ではありません (タスク %s の%sは %s の番です)", role, st.Task, st.Step.Label(), st.Role)
 	}
-	p, err := f.readPlan()
+	doc, err := f.readPlan(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -221,7 +252,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	// 状態を書き込まずに*RejectedErrorを返す。
 	switch st.Step {
 	case state.StepImplement:
-		if err := f.checkImplement(ctx, st, p, input); err != nil {
+		if err := f.checkImplement(ctx, st, doc.Plan, input); err != nil {
 			return "", err
 		}
 		if err := f.startReview(ctx, st, rec, now); err != nil {
@@ -239,7 +270,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 			return "", err
 		}
 	case state.StepAsk:
-		if err := f.finishAsk(ctx, st, p, rec, now); err != nil {
+		if err := f.finishAsk(ctx, st, doc.Plan, rec, now); err != nil {
 			return "", err
 		}
 	default:
@@ -252,7 +283,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	if err := f.Dir.Save(st, now); err != nil {
 		return "", err
 	}
-	if err := f.resume(ctx, st, p); err != nil {
+	if err := f.resume(ctx, st, doc); err != nil {
 		return "", err
 	}
 	return f.completionMessage(st), nil
@@ -306,18 +337,18 @@ func (f *Flow) finishAsk(ctx context.Context, st *state.State, p *plan.Plan, rec
 
 // resumeは完了を確認済みのステップの履歴と、次のステップを記録する。
 // 保存に失敗してもPendingが残り、履歴の追記とブランチの準備をやり直せる。
-func (f *Flow) resume(ctx context.Context, st *state.State, p *plan.Plan) error {
+func (f *Flow) resume(ctx context.Context, st *state.State, doc *planDoc) error {
 	if err := f.Dir.AppendEvent(*st.Pending); err != nil {
 		return err
 	}
 	if st.Task == "" {
-		f.advance(ctx, st, p)
+		f.advance(ctx, st, doc.Plan)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if st.Task == "" {
-		if err := f.finishPlan(ctx, st); err != nil {
+		if err := f.finishPlan(ctx, st, doc); err != nil {
 			return err
 		}
 	}
@@ -417,7 +448,7 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 			}
 		}
 		st.Tasks = append(st.Tasks, state.TaskRecord{
-			ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: plan.Name(f.PlanPath) + "-" + t.ID, Base: base,
+			ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: f.Name + "-" + t.ID, Base: base,
 		})
 		rec = &st.Tasks[len(st.Tasks)-1]
 	}
@@ -491,17 +522,29 @@ func (f *Flow) load() (*state.State, error) {
 	return st, err
 }
 
+// planDocは読んだ計画書の本文と、それを読み取った内容。
+type planDoc struct {
+	*plan.Plan
+	src string
+}
+
 // readPlanは計画書を読み直す。実行中に人が足したタスクやチェックを、次のタスクを選ぶときに反映する。
-func (f *Flow) readPlan() (*plan.Plan, error) {
-	src, err := os.ReadFile(f.PlanPath) //#nosec G304 G703 -- 人が指定した計画書を読む
+// 1回のサブコマンドの中では、ロックを取ったあとに1回だけ読み、読んだものを使い回す。
+func (f *Flow) readPlan(ctx context.Context) (*planDoc, error) {
+	return readPlan(ctx, f.Source)
+}
+
+// readPlanは読み取り元srcの計画書を読む。
+func readPlan(ctx context.Context, src source.Source) (*planDoc, error) {
+	body, err := src.Read(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("計画書を読めません: %w", err)
+		return nil, err
 	}
-	p, err := plan.Parse(string(src))
+	p, err := plan.Parse(body)
 	if err != nil {
-		return nil, fmt.Errorf("%s を読み取れません:\n%w", f.PlanPath, err)
+		return nil, fmt.Errorf("%s を読み取れません:\n%w", src, err)
 	}
-	return p, nil
+	return &planDoc{Plan: p, src: body}, nil
 }
 
 // parseVerificationは、動作確認の項目をJSONの配列で読む。項目が無い変更でも

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,5 +87,40 @@ func TestFlowWaitDeadlineDuringPrepare(t *testing.T) {
 	}
 	if got := gitRun(t, fx.repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "demo-1-1" {
 		t.Errorf("ブランチ = %q、期待値 = %q", got, "demo-1-1")
+	}
+}
+
+func TestFlowWaitWithoutReadingPlan(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+	fx.wait(t, state.RoleImplementer)
+	// 計画書を読めなくして、読みに行けばエラーになるようにする。
+	src, err := os.ReadFile(fx.flow.PlanPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fx.flow.PlanPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// 番でない役割は、計画書を読まずに待ち続ける。
+	for _, role := range []state.Role{state.RoleReviewerCodex, state.RoleReviewerClaude} {
+		in, err := fx.flow.Wait(context.Background(), role, 30*time.Millisecond)
+		if err != nil || in.Action != ActionWait {
+			t.Errorf("%s のWait = %+v, %v、期待値 = 計画書を読まずに action: wait", role, in, err)
+		}
+	}
+
+	// 番の役割は、指示を組み立てるために計画書を読む。
+	if _, err := fx.flow.Wait(context.Background(), state.RoleImplementer, time.Second); err == nil || !strings.Contains(err.Error(), "計画書を読めません") {
+		t.Errorf("実装者のWaitのエラー = %v、期待値 = 計画書を読めないエラー", err)
+	}
+
+	if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+		t.Fatal(err)
+	}
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionImplement || in.Task != "1-1" || in.Title != "タスク" {
+		t.Errorf("指示 = %+v、期待値 = タスク1-1の実装", in)
 	}
 }

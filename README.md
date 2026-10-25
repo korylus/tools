@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-23 -->
+<!-- last_synced: 2026-10-25 -->
 
 # korylus-tools
 
@@ -62,13 +62,14 @@ koryluslint md [-base=<ref>] [--all] [--write] [paths...]
 ### 使い方
 
 ```sh
-korylusflow wait <計画書のパス> -role=<役割> [-timeout=<時間>]
-korylusflow done <計画書のパス> -role=<役割>
-korylusflow status <計画書のパス>
-korylusflow report <計画書のパス>
+korylusflow wait <計画書> -role=<役割> [-timeout=<時間>]
+korylusflow done <計画書> -role=<役割>
+korylusflow status <計画書>
+korylusflow report <計画書>
 ```
 
-どのサブコマンドもプロジェクトのルートで実行し、計画書のパスはルートからの相対パスで指定します。
+どのサブコマンドもプロジェクトのルートで実行します。
+計画書は、ルートからの相対パスか、WikinoのページのURL (`https://wikino.app/s/<スペース>/pages/<ページ番号>`) で指定します (「[計画書名とWikinoのページの計画書](#計画書名とwikinoのページの計画書)」)。
 役割は `implementer` (実装者)・`reviewer-codex` (レビュアー (Codex))・`reviewer-claude` (レビュアー (Claude Code)) のいずれかです。
 
 | サブコマンド | 役割                                                                                                                                 |
@@ -89,6 +90,27 @@ korylusflow report <計画書のパス>
 | 0          | 完了を記録した                                                              |
 | 1          | エラー                                                                      |
 | 2          | 完了の条件を満たさず、記録を受け付けなかった (理由を読んで直せばやり直せる) |
+
+### 計画書名とWikinoのページの計画書
+
+計画書名は、状態の置き場所・ブランチ名・作業報告書の見出しに使う名前です。
+計画書の最初の `## ` の見出しより前に、次の形の行で書きます。
+値には英小文字・数字と、間に挟むハイフンだけを使います。
+
+```markdown
+**計画書名**: feature-name
+```
+
+ファイルの計画書では、この行を省略するとファイル名 (拡張子を除く) を使います。
+行を書くときは、ファイル名と同じ値にします。
+Wikinoのページの計画書では、この行が必須です。
+ループの途中で計画書名を変えると、状態の置き場所が変わって続きから進められなくなります。
+
+Wikinoのページの計画書は、[Wikino CLI](https://github.com/wikinoapp/wikino/tree/main/cli) の `wikino` コマンドで、下書きがあれば下書きを、無ければページを読みます。
+実装者が付けたチェックや実装判断ログは、公開するまで下書きにしか無いためです。
+`korylusflow` はWikinoに書き込まないため、`wikino auth login <スペース>` でログインするトークンには読み取りの権限があれば足ります。
+`korylusflow` は `https://wikino.app` のページを読むため、既定の接続先を変えている環境では `--host=https://wikino.app` を付けてログインします。
+未ログインやレート制限で読めなかったときは、状態を書き換えずにエラーで終わります。
 
 ### 1タスクの流れ
 
