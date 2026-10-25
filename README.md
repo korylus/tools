@@ -109,6 +109,7 @@ Wikinoのページの計画書では、この行が必須です。
 Wikinoのページの計画書は、[Wikino CLI](https://github.com/wikinoapp/wikino/tree/main/cli) の `wikino` コマンドで、下書きがあれば下書きを、無ければページを読みます。
 実装者が付けたチェックや実装判断ログは、公開するまで下書きにしか無いためです。
 `korylusflow` はWikinoに書き込まないため、`wikino auth login <スペース>` でログインするトークンには読み取りの権限があれば足ります。
+`korylusflow` は `https://wikino.app` のページを読むため、既定の接続先を変えている環境では `--host=https://wikino.app` を付けてログインします。
 未ログインやレート制限で読めなかったときは、状態を書き換えずにエラーで終わります。
 
 ### 1タスクの流れ

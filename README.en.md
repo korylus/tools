@@ -111,6 +111,7 @@ Changing the plan name in the middle of the loop moves the state location, and t
 A plan on a Wikino page is read with the `wikino` command of the [Wikino CLI](https://github.com/wikinoapp/wikino/tree/main/cli): its draft if there is one, otherwise the page.
 This is because the checks and the implementation decision log written by the implementer exist only in the draft until it is published.
 `korylusflow` never writes to Wikino, so the token you log in with via `wikino auth login <space>` only needs read permissions.
+Because `korylusflow` reads pages on `https://wikino.app`, add `--host=https://wikino.app` when you log in if you have changed the default host.
 When the plan cannot be read, for example because you are not logged in or hit the rate limit, it ends with an error without changing the state.
 
 ### Flow of a task
