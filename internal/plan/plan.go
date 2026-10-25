@@ -1,7 +1,8 @@
 // Package planは作業計画書のタスクリストを読み取る。
 //
 // 読み取るのは「## タスクリスト」節のトップレベルのタスク行と、その下の
-// `**保護領域**:` / `**想定行数**:` / `**対応する確認項目**:` の行に限る。
+// `**保護領域**:` / `**想定行数**:` / `**対応する確認項目**:` の行と、最初の節より前の
+// `**計画書名**:` の行に限る。
 // HTMLコメントとコードブロックの中は、書式の例を誤って拾わないよう読み飛ばす。
 package plan
 
@@ -41,10 +42,17 @@ var (
 	reFeedbackPhase = regexp.MustCompile(`^` + feedbackPrefix + `([0-9]+)$`)
 	// reItemRefは作業報告書の確認項目への参照 (第N版 #M) にマッチする。
 	reItemRef = regexp.MustCompile(`第\s*([0-9]+)\s*版\s*#([0-9]+)`)
+	// reNameLineは最初の節より前の `**計画書名**:` の行にマッチし、値を取り出す。
+	reNameLine = regexp.MustCompile(`^\*\*計画書名\*\*:\s*(.*?)\s*$`)
+	// reNameは計画書名に使える値にマッチする。ブランチ名とパスの一部になるため、
+	// 英小文字・数字と、間に挟むハイフンだけにする。
+	reName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 )
 
 // Planは作業計画書から読み取った内容。
 type Plan struct {
+	// Nameは本文の `**計画書名**:` の行に書かれた計画書名。行が無ければ空文字。
+	Name string
 	// Tasksは計画書に書かれた順のタスク。
 	Tasks []Task
 }
@@ -112,10 +120,16 @@ func (t Task) FeedbackRound() (int, bool) {
 	return n, true
 }
 
-// Nameは計画書のパスから計画書名 (拡張子を除いたファイル名) を返す。
-// 状態ディレクトリやブランチ名に使う。
-func Name(path string) string {
-	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+// FileNameは、パスpathのファイルの計画書pの計画書名を返す。計画書名は状態ディレクトリ・
+// ブランチ名・作業報告書の見出しに使う。計画書名の行が無ければ、拡張子を除いたファイル名を使う。
+// 行があるときはファイル名と同じでなければエラーにする。作業報告書のディレクトリ名
+// (計画書名) から、同じファイル名の計画書を探せるようにするためである。
+func FileName(path string, p *Plan) (string, error) {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if p.Name != "" && p.Name != base {
+		return "", fmt.Errorf("計画書名 %s がファイル名 %s と違います。計画書名の行かファイル名を直して揃えてください", p.Name, base)
+	}
+	return base, nil
 }
 
 // Nextは最初の未完了のタスクを返す。すべて完了していればfalseを返す。
@@ -156,7 +170,8 @@ func Parse(src string) (*Plan, error) {
 	p := &Plan{}
 	var errs []error
 	seen := map[string]int{}
-	inSection, inComment := false, false
+	inSection, inComment, beforeSections := false, false, true
+	nameLineNo := 0
 	var cur *Task
 
 	src = strings.ReplaceAll(src, "\r\n", "\n")
@@ -181,7 +196,22 @@ func Parse(src string) (*Plan, error) {
 
 		if strings.HasPrefix(line, "## ") {
 			inSection = strings.TrimSpace(line) == sectionTitle
+			beforeSections = false
 			cur = nil
+			continue
+		}
+		if beforeSections {
+			if m := reNameLine.FindStringSubmatch(line); m != nil {
+				switch {
+				case nameLineNo > 0:
+					errs = append(errs, fmt.Errorf("%d行目: 計画書名の行が重複しています (%d行目と同じ)", lineNo, nameLineNo))
+				case !reName.MatchString(m[1]):
+					errs = append(errs, fmt.Errorf("%d行目: 計画書名 %q には、英小文字・数字と、間に挟むハイフンだけを使ってください", lineNo, m[1]))
+				default:
+					p.Name = m[1]
+				}
+				nameLineNo = lineNo
+			}
 			continue
 		}
 		if !inSection {

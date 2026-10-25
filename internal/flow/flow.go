@@ -49,6 +49,8 @@ func reject(format string, args ...any) error {
 type Flow struct {
 	// PlanPathはプロジェクトのルートからの計画書のパス。指示の中のコマンドにもそのまま使う。
 	PlanPath string
+	// Nameは計画書名。状態の置き場・ブランチ名・作業報告書の見出しに使う。
+	Name string
 	// Rootはプロジェクトのルート。レビュードキュメントの置き場所と、本体のリポジトリを
 	// 求めるのに使う。
 	Root string
@@ -59,15 +61,25 @@ type Flow struct {
 }
 
 // Newは計画書planPathの状態遷移を、stateRootの下の状態ディレクトリで扱うFlowを返す。
-// プロジェクトのルートは作業ディレクトリとする。
-func New(planPath, stateRoot string) *Flow {
+// プロジェクトのルートは作業ディレクトリとする。状態の置き場を計画書名で決めるため、
+// 計画書を1回読む。
+func New(planPath, stateRoot string) (*Flow, error) {
+	doc, err := readPlanFile(planPath)
+	if err != nil {
+		return nil, err
+	}
+	name, err := plan.FileName(planPath, doc.Plan)
+	if err != nil {
+		return nil, err
+	}
 	return &Flow{
 		PlanPath:     planPath,
+		Name:         name,
 		Root:         ".",
-		Dir:          state.NewDir(stateRoot, plan.Name(planPath)),
+		Dir:          state.NewDir(stateRoot, name),
 		Now:          time.Now,
 		PollInterval: defaultPollInterval,
-	}
+	}, nil
 }
 
 // Waitは役割roleの番が来るまで待ち、次の指示を返す。timeoutが正で、それを過ぎても
@@ -118,21 +130,21 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	if st.Pending == nil && st.Task != "" && st.Role != role {
 		return Instruction{}, false, nil
 	}
-	p, err := f.readPlan()
+	doc, err := f.readPlan()
 	if err != nil {
 		return Instruction{}, false, err
 	}
 	if st.Pending != nil {
-		if err := f.resume(ctx, st, p); err != nil {
+		if err := f.resume(ctx, st, doc); err != nil {
 			return Instruction{}, false, err
 		}
 	} else if st.Task == "" {
-		f.advance(ctx, st, p)
+		f.advance(ctx, st, doc.Plan)
 		if err := ctx.Err(); err != nil {
 			return Instruction{}, false, err
 		}
 		if st.Task == "" {
-			if err := f.finishPlan(ctx, st); err != nil {
+			if err := f.finishPlan(ctx, st, doc); err != nil {
 				return Instruction{}, false, err
 			}
 		}
@@ -148,7 +160,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 		return Instruction{}, false, nil
 	}
 	in := Instruction{Role: role, PlanPath: f.PlanPath, Task: st.Task, Record: st.TaskRecord(st.Task), Ask: st.Ask}
-	if t, ok := findTask(p, st.Task); ok {
+	if t, ok := findTask(doc.Plan, st.Task); ok {
 		in.Title = t.Title
 	}
 	if rec := in.Record; rec != nil && len(rec.Reviews) > 0 {
@@ -193,11 +205,11 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 		if st.Pending.Role != role {
 			return "", reject("%s の番ではありません (完了の記録は %s の番です)", role, st.Pending.Role)
 		}
-		p, err := f.readPlan()
+		doc, err := f.readPlan()
 		if err != nil {
 			return "", err
 		}
-		if err := f.resume(ctx, st, p); err != nil {
+		if err := f.resume(ctx, st, doc); err != nil {
 			return "", err
 		}
 		return f.completionMessage(st), nil
@@ -208,7 +220,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	if st.Role != role {
 		return "", reject("%s の番ではありません (タスク %s の%sは %s の番です)", role, st.Task, st.Step.Label(), st.Role)
 	}
-	p, err := f.readPlan()
+	doc, err := f.readPlan()
 	if err != nil {
 		return "", err
 	}
@@ -227,7 +239,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	// 状態を書き込まずに*RejectedErrorを返す。
 	switch st.Step {
 	case state.StepImplement:
-		if err := f.checkImplement(ctx, st, p, input); err != nil {
+		if err := f.checkImplement(ctx, st, doc.Plan, input); err != nil {
 			return "", err
 		}
 		if err := f.startReview(ctx, st, rec, now); err != nil {
@@ -245,7 +257,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 			return "", err
 		}
 	case state.StepAsk:
-		if err := f.finishAsk(ctx, st, p, rec, now); err != nil {
+		if err := f.finishAsk(ctx, st, doc.Plan, rec, now); err != nil {
 			return "", err
 		}
 	default:
@@ -258,7 +270,7 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	if err := f.Dir.Save(st, now); err != nil {
 		return "", err
 	}
-	if err := f.resume(ctx, st, p); err != nil {
+	if err := f.resume(ctx, st, doc); err != nil {
 		return "", err
 	}
 	return f.completionMessage(st), nil
@@ -312,18 +324,18 @@ func (f *Flow) finishAsk(ctx context.Context, st *state.State, p *plan.Plan, rec
 
 // resumeは完了を確認済みのステップの履歴と、次のステップを記録する。
 // 保存に失敗してもPendingが残り、履歴の追記とブランチの準備をやり直せる。
-func (f *Flow) resume(ctx context.Context, st *state.State, p *plan.Plan) error {
+func (f *Flow) resume(ctx context.Context, st *state.State, doc *planDoc) error {
 	if err := f.Dir.AppendEvent(*st.Pending); err != nil {
 		return err
 	}
 	if st.Task == "" {
-		f.advance(ctx, st, p)
+		f.advance(ctx, st, doc.Plan)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if st.Task == "" {
-		if err := f.finishPlan(ctx, st); err != nil {
+		if err := f.finishPlan(ctx, st, doc); err != nil {
 			return err
 		}
 	}
@@ -423,7 +435,7 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 			}
 		}
 		st.Tasks = append(st.Tasks, state.TaskRecord{
-			ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: plan.Name(f.PlanPath) + "-" + t.ID, Base: base,
+			ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: f.Name + "-" + t.ID, Base: base,
 		})
 		rec = &st.Tasks[len(st.Tasks)-1]
 	}
@@ -497,17 +509,29 @@ func (f *Flow) load() (*state.State, error) {
 	return st, err
 }
 
+// planDocは読んだ計画書の本文と、それを読み取った内容。
+type planDoc struct {
+	*plan.Plan
+	src string
+}
+
 // readPlanは計画書を読み直す。実行中に人が足したタスクやチェックを、次のタスクを選ぶときに反映する。
-func (f *Flow) readPlan() (*plan.Plan, error) {
-	src, err := os.ReadFile(f.PlanPath) //#nosec G304 G703 -- 人が指定した計画書を読む
+// 1回のサブコマンドの中では、ロックを取ったあとに1回だけ読み、読んだものを使い回す。
+func (f *Flow) readPlan() (*planDoc, error) {
+	return readPlanFile(f.PlanPath)
+}
+
+// readPlanFileはパスpathの計画書を読む。
+func readPlanFile(path string) (*planDoc, error) {
+	src, err := os.ReadFile(path) //#nosec G304 G703 -- 人が指定した計画書を読む
 	if err != nil {
 		return nil, fmt.Errorf("計画書を読めません: %w", err)
 	}
 	p, err := plan.Parse(string(src))
 	if err != nil {
-		return nil, fmt.Errorf("%s を読み取れません:\n%w", f.PlanPath, err)
+		return nil, fmt.Errorf("%s を読み取れません:\n%w", path, err)
 	}
-	return p, nil
+	return &planDoc{Plan: p, src: string(src)}, nil
 }
 
 // parseVerificationは、動作確認の項目をJSONの配列で読む。項目が無い変更でも

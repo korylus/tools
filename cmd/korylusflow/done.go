@@ -37,7 +37,12 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 		return exitError
 	}
 
-	msg, err := flow.New(planPath, stateRoot).Done(ctx, role, stdin)
+	f, err := flow.New(planPath, stateRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "エラー: %v\n", err)
+		return exitError
+	}
+	msg, err := f.Done(ctx, role, stdin)
 	var rejected *flow.RejectedError
 	switch {
 	case errors.As(err, &rejected):

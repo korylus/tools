@@ -41,7 +41,12 @@ func wait(ctx context.Context, args []string, stateRoot string, stdout, stderr i
 		return exitError
 	}
 
-	in, err := flow.New(planPath, stateRoot).Wait(ctx, role, *timeout)
+	f, err := flow.New(planPath, stateRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "エラー: %v\n", err)
+		return exitError
+	}
+	in, err := f.Wait(ctx, role, *timeout)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(stderr, "中断しました")

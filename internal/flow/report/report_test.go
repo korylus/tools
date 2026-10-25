@@ -53,7 +53,7 @@ func newInput(t *testing.T, src string) Input {
 		},
 	}}}
 	return Input{
-		PlanPath: "docs/private/plans/1_doing/demo.md", PlanSrc: src, Plan: p, Version: 1, Now: at(120), State: st,
+		PlanPath: "docs/private/plans/1_doing/demo.md", Name: "demo", PlanSrc: src, Plan: p, Version: 1, Now: at(120), State: st,
 		Events: []state.Event{
 			{Task: "1-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(0), Ended: at(30)},
 			{Task: "1-1", Step: state.StepReview, Role: state.RoleReviewerCodex, Started: at(30), Ended: at(50)},

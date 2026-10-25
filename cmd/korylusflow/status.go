@@ -44,7 +44,12 @@ func status(args []string, stateRoot string, now time.Time, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "エラー: %s を読み取れません:\n%v\n", planPath, err)
 		return exitError
 	}
-	dir := state.NewDir(stateRoot, plan.Name(planPath))
+	name, err := plan.FileName(planPath, p)
+	if err != nil {
+		fmt.Fprintf(stderr, "エラー: %v\n", err)
+		return exitError
+	}
+	dir := state.NewDir(stateRoot, name)
 	st, err := dir.Load()
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)

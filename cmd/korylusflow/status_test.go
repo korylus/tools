@@ -163,6 +163,17 @@ func TestStatusErrors(t *testing.T) {
 			},
 			wantStderr: "を読み取れません",
 		},
+		{
+			name: "計画書名の行がファイル名と違うとエラー",
+			args: func(t *testing.T) []string {
+				path := filepath.Join(t.TempDir(), "korylusflow.md")
+				if err := os.WriteFile(path, []byte("**計画書名**: other\n\n"+strings.TrimPrefix(testPlan, "# 計画書\n\n")), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return []string{path}
+			},
+			wantStderr: "計画書名 other がファイル名 korylusflow と違います",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

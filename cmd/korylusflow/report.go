@@ -27,7 +27,12 @@ func report(ctx context.Context, args []string, stateRoot string, stdout, stderr
 		return parseFailed(flags, err)
 	}
 
-	path, err := flow.New(planPath, stateRoot).Report(ctx)
+	f, err := flow.New(planPath, stateRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "エラー: %v\n", err)
+		return exitError
+	}
+	path, err := f.Report(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError

@@ -36,6 +36,8 @@ var partOrder = []string{"実装", "テスト"}
 type Input struct {
 	// PlanPathは計画書の、プロジェクトのルートからの相対パス。
 	PlanPath string
+	// Nameは計画書名。見出しに使う。
+	Name string
 	// PlanSrcは計画書の内容、Planはそれを読み取ったもの。
 	PlanSrc string
 	Plan    *plan.Plan
@@ -114,7 +116,7 @@ func (b *builder) f(format string, args ...any) {
 
 func (b *builder) overview() {
 	in := b.in
-	b.f("# 作業報告書 第%d版: %s\n\n## 概要\n\n", in.Version, plan.Name(in.PlanPath))
+	b.f("# 作業報告書 第%d版: %s\n\n## 概要\n\n", in.Version, in.Name)
 	b.f("- 計画書: %s\n- 作成: %s\n", code(in.PlanPath), in.Now.Format(timeLayout))
 	if len(in.Events) > 0 {
 		b.f("- 計画書の開始: %s\n", earliest(in.Events).Format(timeLayout))
