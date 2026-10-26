@@ -201,7 +201,8 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 
 // Doneは役割roleが進めているステップの完了を記録し、次のステップを決めて書き込む。
 // 完了の条件を満たさなければ、何も書き込まずに*RejectedErrorを返す。
-// 実装のステップでは、inputから動作確認の項目をJSONの配列で読む。
+// ブランチを作る実装タスクでは、inputから動作確認の項目をJSONの配列で読む。
+// [implementer] のタスクでは、計画書のチェックを確かめ、inputは読まない。
 // 戻り値は、次のステップを伝える文面。
 func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (string, error) {
 	unlock, err := f.Dir.LockContext(ctx)
