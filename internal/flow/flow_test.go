@@ -577,3 +577,96 @@ func TestNewWikinoWithoutName(t *testing.T) {
 		t.Errorf("openのエラー = %v、期待値 = 計画書名の行が無いエラー", err)
 	}
 }
+
+// mergeAndDeleteは、人がブランチnameをmainにマージして消したときの状態をrepoに作る。
+func mergeAndDelete(t *testing.T, repo, name string) {
+	t.Helper()
+	gitRun(t, repo, "checkout", "--quiet", "main")
+	gitRun(t, repo, "merge", "--quiet", "--no-ff", "-m", "merge "+name, name)
+	gitRun(t, repo, "branch", "--quiet", "-D", name)
+}
+
+func TestFlowMissingPreviousBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("前のタスクのブランチが消えていれば最初のベースから作り、作業報告書でその旨を示す", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t,
+			"- [ ] **1-1**: [{repo}] 最初のタスク",
+			"- [ ] **1-2**: [shimbaco] マージする",
+			"- [ ] **1-3**: [{repo}] 次のタスク",
+		)
+		fx.wait(t, state.RoleImplementer)
+		commit(t, fx.repo, "first.txt")
+		fx.checkTask(t, "1-1")
+		if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
+			t.Fatalf("実装のDoneのエラー = %v", err)
+		}
+		fx.approve(t, "1-1")
+
+		if in := fx.wait(t, state.RoleImplementer); in.Action != ActionAsk || in.Ask.Kind != state.AskHumanTask {
+			t.Fatalf("指示 = %+v、人が行うタスクのaskを期待", in)
+		}
+		mergeAndDelete(t, fx.repo, "demo-1-1")
+		fx.checkTask(t, "1-2")
+		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+			t.Fatalf("人への確認のDoneのエラー = %v", err)
+		}
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Task != "1-3" || in.Record.Base != "main" {
+			t.Fatalf("指示 = %+v、mainから作ったタスク1-3の実装を期待", in)
+		}
+		commit(t, fx.repo, "second.txt")
+		fx.checkTask(t, "1-3")
+		if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
+			t.Fatalf("実装のDoneのエラー = %v", err)
+		}
+		fx.approve(t, "1-3")
+
+		out := fx.readReport(t, 1)
+		for _, want := range []string{
+			"- 変更: ブランチ `demo-1-1` がローカルに残っていないため示せません\n",
+			"| `second.txt` | 1 | 0 |",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("作業報告書に %q が無い:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, "読めません") {
+			t.Errorf("消えたブランチをgitのエラーのまま示している:\n%s", out)
+		}
+	})
+
+	t.Run("準備を待つ間に前のタスクのブランチが消えれば元のブランチを求め直す", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t,
+			"- [ ] **1-1**: [{repo}] 最初のタスク",
+			"- [ ] **1-2**: [{repo}] 次のタスク",
+		)
+		fx.wait(t, state.RoleImplementer)
+		commit(t, fx.repo, "first.txt")
+		fx.checkTask(t, "1-1")
+		if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
+			t.Fatalf("実装のDoneのエラー = %v", err)
+		}
+		writeFile(t, fx.repo, "wip.txt", "wip\n")
+		fx.approve(t, "1-1")
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionAsk || in.Ask.Kind != state.AskBranch || in.Record.Base != "demo-1-1" {
+			t.Fatalf("指示 = %+v、demo-1-1を元にしたブランチの準備のaskを期待", in)
+		}
+		if err := os.Remove(filepath.Join(fx.repo, "wip.txt")); err != nil {
+			t.Fatal(err)
+		}
+		mergeAndDelete(t, fx.repo, "demo-1-1")
+		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+			t.Fatalf("人への確認のDoneのエラー = %v", err)
+		}
+		in = fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Task != "1-2" || in.Record.Base != "main" {
+			t.Fatalf("指示 = %+v、mainから作ったタスク1-2の実装を期待", in)
+		}
+	})
+}

@@ -60,7 +60,9 @@ type Input struct {
 type Changes struct {
 	Commits []branch.Commit
 	Files   []branch.FileChange
-	// Errは変更を読めなかった理由。読めたら空文字。
+	// Missingは、ローカルに残っていないため変更を読めなかったブランチ。
+	Missing []string
+	// Errは、Missing以外の理由で変更を読めなかったときの理由。読めたら空文字。
 	Err string
 }
 
@@ -170,9 +172,16 @@ func (b *builder) taskChanges() {
 		b.f("- リポジトリ: %s (作業するディレクトリ: %s)\n", code(rec.Repo), code(rec.Dir))
 		b.f("- ブランチ: %s (元: %s)\n", code(rec.Branch), code(rec.Base))
 		ch := b.in.Changes[rec.ID]
-		if ch.Err != "" {
+		switch {
+		case len(ch.Missing) > 0:
+			names := make([]string, len(ch.Missing))
+			for i, name := range ch.Missing {
+				names[i] = code(name)
+			}
+			b.f("- 変更: ブランチ %s がローカルに残っていないため示せません\n", strings.Join(names, "・"))
+		case ch.Err != "":
 			b.f("- 変更: 読めません (%s)\n", cell(ch.Err))
-		} else {
+		default:
 			impl, test := lineCounts(ch.Files)
 			b.f("- 変更行数: テスト以外%d行、テスト%d行 (追加と削除の合計)\n", impl, test)
 		}

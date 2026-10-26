@@ -439,18 +439,21 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 		removeTaskRecord(st, t.ID)
 		rec = nil
 	}
-	if rec == nil {
-		base := previousBranch(st, target.Repo)
-		if base == "" {
-			if base, err = branch.DefaultBase(ctx, target.Repo); err != nil {
-				setAsk(st, state.AskBranch, "ブランチを作る元のブランチを決められません", err.Error())
-				return
-			}
+	// まだ準備できていないタスクは、前に求めた元のブランチが人の対応の間に消えて
+	// いることがあるため、準備するたびに求め直す。
+	if rec == nil || !rec.Prepared {
+		var base string
+		if base, err = baseBranch(ctx, st, target.Repo); err != nil {
+			setAsk(st, state.AskBranch, "ブランチを作る元のブランチを決められません", err.Error())
+			return
 		}
-		st.Tasks = append(st.Tasks, state.TaskRecord{
-			ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: f.Name + "-" + t.ID, Base: base,
-		})
-		rec = &st.Tasks[len(st.Tasks)-1]
+		if rec == nil {
+			st.Tasks = append(st.Tasks, state.TaskRecord{
+				ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: f.Name + "-" + t.ID,
+			})
+			rec = &st.Tasks[len(st.Tasks)-1]
+		}
+		rec.Base = base
 	}
 
 	if err := branch.Prepare(ctx, rec.Repo, rec.Branch, rec.Base, excludedPaths); err != nil {
@@ -464,6 +467,22 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 	}
 	rec.Prepared = true
 	st.Step = state.StepImplement
+}
+
+// baseBranchは、リポジトリrepoで次のタスクのブランチを作る元のブランチを返す。
+// 前のタスクのブランチがローカルに残っていればそれを、無ければ (マージして消したなど)
+// そのリポジトリの最初のタスクと同じ元のブランチを返す。
+func baseBranch(ctx context.Context, st *state.State, repo string) (string, error) {
+	if prev := previousBranch(st, repo); prev != "" {
+		ok, err := branch.Exists(ctx, repo, prev)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return prev, nil
+		}
+	}
+	return branch.DefaultBase(ctx, repo)
 }
 
 // previousBranchは、同じリポジトリrepoで最後にブランチを準備できたタスクのブランチを返す。

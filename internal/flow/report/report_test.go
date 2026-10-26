@@ -228,6 +228,18 @@ func TestBuildUnreadableChanges(t *testing.T) {
 	assertContains(t, string(Build(in)), "- 変更: 読めません (git log が失敗しました unknown revision)\n")
 }
 
+func TestBuildMissingBranches(t *testing.T) {
+	t.Parallel()
+
+	in := newInput(t, testPlan)
+	in.Changes["1-1"] = Changes{Missing: []string{"demo-1-1", "develop"}}
+	out := string(Build(in))
+	assertContains(t, out, "- 変更: ブランチ `demo-1-1`・`develop` がローカルに残っていないため示せません\n")
+	if strings.Contains(out, "読めません") {
+		t.Errorf("ブランチが残っていないときにgitのエラーを示している:\n%s", out)
+	}
+}
+
 func TestParseResults(t *testing.T) {
 	t.Parallel()
 

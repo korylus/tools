@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-25 -->
+<!-- last_synced: 2026-10-26 -->
 
 # korylus-tools
 
@@ -116,7 +116,7 @@ When the plan cannot be read, for example because you are not logged in or hit t
 
 ### Flow of a task
 
-1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task, or main if there is no develop)
+1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task or when the previous task's branch no longer exists locally, or main if there is no develop)
 2. The implementer implements the task with `/korylus-do-plan-task` and commits
 3. A reviewer reviews with `/korylus-review`; Codex does the first review, and later reviews are done by a different role than the previous one
 4. `korylusflow` answers the auto-fixable findings in the review document with the recommended options, and the reviewer fixes the code and commits
