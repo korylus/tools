@@ -75,6 +75,8 @@ type builder struct {
 	records []state.TaskRecord
 	// addedは、この版の期間に記録したステップがあるタスク。
 	added map[string]bool
+	// worksは、実装者がブランチを作らずに行ったタスク ([implementer]) の番号を、進めた順に並べたもの。
+	works []string
 }
 
 // Buildは作業報告書1版をMarkdownで組み立てる。
@@ -82,6 +84,7 @@ func Build(in Input) []byte {
 	b := newBuilder(in)
 	b.overview()
 	b.taskChanges()
+	b.implementerTasks()
 	b.deferred()
 	b.waits()
 	b.timing()
@@ -107,6 +110,12 @@ func newBuilder(in Input) *builder {
 	for _, rec := range in.State.Tasks {
 		if rec.Prepared && implemented[rec.ID] {
 			b.records = append(b.records, rec)
+		}
+	}
+	// 実装のステップを記録したのに記録を持たないタスクは、ブランチを作らずに行ったタスク。
+	for _, e := range in.Events {
+		if e.Step == state.StepImplement && in.State.TaskRecord(e.Task) == nil && !slices.Contains(b.works, e.Task) {
+			b.works = append(b.works, e.Task)
 		}
 	}
 	return b
@@ -255,6 +264,25 @@ func (b *builder) taskChanges() {
 		}
 		b.f("\n")
 	}
+}
+
+// implementerTasksは、実装者がブランチを作らずに行ったタスクを並べる。ブランチの差分が
+// 無いため変更の欄を持たず、結果は人が確かめて計画書にチェックを付けている。
+func (b *builder) implementerTasks() {
+	b.f("## 実装者が行ったタスク\n\n")
+	if len(b.works) == 0 {
+		b.f("なし\n\n")
+		return
+	}
+	b.f("ブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n")
+	for _, id := range b.works {
+		b.f("- %s", cell(taskLabel(id, b.tasks[id])))
+		if b.in.Version > 1 && b.added[id] {
+			b.f(" (この版で進めたタスク)")
+		}
+		b.f("\n")
+	}
+	b.f("\n")
 }
 
 func (b *builder) deferred() {

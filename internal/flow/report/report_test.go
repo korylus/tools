@@ -381,3 +381,22 @@ func TestCode(t *testing.T) {
 		t.Errorf("code() = %q、期待値 = %q", got, want)
 	}
 }
+
+func TestBuildImplementerTasks(t *testing.T) {
+	t.Parallel()
+
+	in := newInput(t, testPlan)
+	out := string(Build(in))
+	assertContains(t, out, "## 実装者が行ったタスク\n\nなし\n")
+
+	// 実装のステップを記録したのに記録を持たないタスクを、進めた順に1度だけ並べる。
+	in.Version, in.Since = 2, len(in.Events)
+	in.Events = append(in.Events,
+		state.Event{Task: "2-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(200), Ended: at(210)},
+		state.Event{Task: "2-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(210), Ended: at(220)},
+	)
+	in.Events = append([]state.Event{{Task: "0-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(0), Ended: at(1)}}, in.Events...)
+	in.Since++
+	out = string(Build(in))
+	assertContains(t, out, "## 実装者が行ったタスク\n\nブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n- 0-1\n- 2-1 (この版で進めたタスク)\n")
+}

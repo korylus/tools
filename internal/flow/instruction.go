@@ -13,10 +13,12 @@ type Action string
 // 指示の種類。
 const (
 	ActionImplement Action = "implement"
-	ActionReview    Action = "review"
-	ActionFix       Action = "fix"
-	ActionAsk       Action = "ask"
-	ActionFinish    Action = "finish"
+	// ActionWorkは、実装者がブランチを作らずに行うタスク ([implementer]) の作業の指示。
+	ActionWork   Action = "work"
+	ActionReview Action = "review"
+	ActionFix    Action = "fix"
+	ActionAsk    Action = "ask"
+	ActionFinish Action = "finish"
 	// ActionWaitは、waitの-timeoutを過ぎても番が来なかったときの指示。
 	ActionWait Action = "wait"
 )
@@ -32,7 +34,7 @@ type Instruction struct {
 	// TaskとTitleは指示の対象のタスク。終了の指示では空。
 	Task  string
 	Title string
-	// Recordは対象のタスクの記録。人が行うタスクやリポジトリを求められないときはnil。
+	// Recordは対象のタスクの記録。人が行うタスク・実装者がブランチを作らずに行うタスク・リポジトリを求められないときはnil。
 	Record *state.TaskRecord
 	// Askは人に尋ねる理由。ActionAskのときだけ持つ。
 	Ask *state.Ask
@@ -71,6 +73,8 @@ func (in Instruction) String() string {
 	switch in.Action {
 	case ActionImplement:
 		in.writeImplement(&b)
+	case ActionWork:
+		in.writeWork(&b)
 	case ActionReview:
 		in.writeReview(&b)
 	case ActionFix:
@@ -98,6 +102,19 @@ func (in Instruction) writeImplement(b *strings.Builder) {
 		"変更のうち、人が画面や処理で確かめられるものを、動作確認の項目のJSONの配列にまとめる。無ければ " + code("[]") + " にする\n   形: " + verificationExample,
 		fmt.Sprintf("%s を、項目のJSONを標準入力に渡して実行する", code(in.doneCommand())),
 		"done が受け付けられなかったら、理由を読んで直してから4をやり直す。直せなければ人に尋ねる",
+		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
+	}
+	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")
+	writeSteps(b, steps)
+}
+
+func (in Instruction) writeWork(b *strings.Builder) {
+	steps := []string{
+		fmt.Sprintf("計画書 %s のタスク %s を読み、書かれた作業を行う。ブランチの作成・切り替えとコミットはしない", in.PlanPath, in.Task),
+		"取り返しのつかない操作 (gitで追跡していないファイルの削除など) は、行う前に対象の一覧を人に示し、その場で了承を得る",
+		"作業の結果 (変えたファイル・作った下書きのURLなど) を人に示し、確かめて計画書のタスクにチェックを付けるよう頼む。チェックは自分で付けない。gitのリポジトリのファイルを変えたときは、人が差分を確かめてコミットするよう伝える",
+		fmt.Sprintf("人がチェックを付けたと答えたら、%s を実行する", code(in.doneCommand())),
+		"done が受け付けられなかったら、理由を人に伝えて3に戻る",
 		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
 	}
 	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")

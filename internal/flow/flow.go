@@ -183,6 +183,9 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	switch st.Step {
 	case state.StepImplement:
 		in.Action = ActionImplement
+		if in.Record == nil {
+			in.Action = ActionWork
+		}
 	case state.StepReview:
 		in.Action = ActionReview
 		in.ReviewNumber, in.ReviewDoc = len(in.Record.Reviews)+1, ""
@@ -250,26 +253,32 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 
 	// 各ステップの完了を確かめ、次のステップを決める。条件を満たさなければ、
 	// 状態を書き込まずに*RejectedErrorを返す。
-	switch st.Step {
-	case state.StepImplement:
+	switch {
+	case st.Step == state.StepImplement && rec == nil:
+		// 実装者がブランチを作らずに行うタスクは、人が結果を確かめてチェックを付けたら完了にする。
+		if t, ok := findTask(doc.Plan, st.Task); !ok || !t.Done {
+			return "", reject("計画書のタスク %s にチェックが付いていません。作業の結果を人に示し、確かめてチェックを付けるよう頼んでください", st.Task)
+		}
+		clearStep(st)
+	case st.Step == state.StepImplement:
 		if err := f.checkImplement(ctx, st, doc.Plan, input); err != nil {
 			return "", err
 		}
 		if err := f.startReview(ctx, st, rec, now); err != nil {
 			return "", err
 		}
-	case state.StepReview:
+	case st.Step == state.StepReview:
 		if err := f.finishReview(ctx, st, rec, now); err != nil {
 			return "", err
 		}
-	case state.StepFix:
+	case st.Step == state.StepFix:
 		if err := checkFix(ctx, rec); err != nil {
 			return "", err
 		}
 		if err := f.afterFix(ctx, st, rec, now); err != nil {
 			return "", err
 		}
-	case state.StepAsk:
+	case st.Step == state.StepAsk:
 		if err := f.finishAsk(ctx, st, doc.Plan, rec, now); err != nil {
 			return "", err
 		}
@@ -430,6 +439,13 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 	if target.Human {
 		removeTaskRecord(st, t.ID)
 		setAsk(st, state.AskHumanTask, "人が行うタスクです", fmt.Sprintf("%s %s", t.ID, t.Title))
+		return
+	}
+	// 実装者がブランチを作らずに行うタスクは、記録を持たない実装のステップにする。
+	// ブランチを準備せず、記録が無いことで指示と完了の条件を見分ける。
+	if target.Implementer {
+		removeTaskRecord(st, t.ID)
+		st.Step = state.StepImplement
 		return
 	}
 

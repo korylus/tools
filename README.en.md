@@ -130,7 +130,13 @@ Task prefixes are read as follows.
 | ------------------------------------------------ | ------------------------------------------------------------ |
 | One starting with `/`, such as `[/workspace/go]` | That path                                                    |
 | `[Go]`, `[Rails]`, or no prefix                  | Read as `/workspace/go`, `/workspace/rails`, or `/workspace` |
+| `[implementer]`                                  | None (a task the implementer does without creating a branch) |
 | Anything else (the name of the person)           | None (a task done by a human)                                |
+
+Use `[implementer]` tasks for work that the implementer can do without creating a branch or a PR, such as creating Wikino drafts or editing a repository that is committed to directly without branches.
+It tells the implementer to do the work (`action: work`) without preparing a branch or adding a review.
+The implementer does not commit, gets the human's approval before irreversible operations, and shows the results to the human.
+The task is complete once the human checks the results and checks the task in the plan.
 
 ### Work report
 
@@ -139,6 +145,7 @@ It does not have an LLM write any text; it lists only the facts in the records.
 
 - Overview (plan, period, and the PR to merge per repository)
 - Changes per task (branch, commits, changed files and line counts, expected line counts, review results, and the topics of the implementation decision log)
+- Tasks the implementer did without creating a branch
 - Deferred findings and the history of waiting for a human
 - Time spent (totals per role and step, and a breakdown per task)
 - Protected areas (what was declared and the command to see the diff)
