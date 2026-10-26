@@ -17,8 +17,9 @@ func runDone(args []string, stdout, stderr io.Writer) int {
 	return done(context.Background(), args, state.Root, os.Stdin, stdout, stderr)
 }
 
-// doneは役割が進めているステップの完了を記録する。実装のステップでは、stdinから
-// 動作確認の項目をJSONの配列で読む。
+// doneは役割が進めているステップの完了を記録する。
+// ブランチを作る実装タスクでは、stdinから動作確認の項目をJSONの配列で読む。
+// [implementer] のタスクでは、計画書のチェックを確かめ、stdinは読まない。
 func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("done", flag.ContinueOnError)
 	flags.SetOutput(stderr)

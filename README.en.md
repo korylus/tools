@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-25 -->
+<!-- last_synced: 2026-10-26 -->
 
 # korylus-tools
 
@@ -116,7 +116,7 @@ When the plan cannot be read, for example because you are not logged in or hit t
 
 ### Flow of a task
 
-1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task, or main if there is no develop)
+1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task or when the previous task's branch no longer exists locally, or main if there is no develop)
 2. The implementer implements the task with `/korylus-do-plan-task` and commits
 3. A reviewer reviews with `/korylus-review`; Codex does the first review, and later reviews are done by a different role than the previous one
 4. `korylusflow` answers the auto-fixable findings in the review document with the recommended options, and the reviewer fixes the code and commits
@@ -130,19 +130,30 @@ Task prefixes are read as follows.
 | ------------------------------------------------ | ------------------------------------------------------------ |
 | One starting with `/`, such as `[/workspace/go]` | That path                                                    |
 | `[Go]`, `[Rails]`, or no prefix                  | Read as `/workspace/go`, `/workspace/rails`, or `/workspace` |
+| `[implementer]`                                  | None (a task the implementer does without creating a branch) |
 | Anything else (the name of the person)           | None (a task done by a human)                                |
+
+Use `[implementer]` tasks for work that the implementer can do without creating a branch or a PR, such as creating Wikino drafts or editing a repository that is committed to directly without branches.
+It tells the implementer to do the work (`action: work`) without preparing a branch or adding a review.
+The implementer does not commit, gets the human's approval before irreversible operations, and shows the results to the human.
+The task is complete once the human checks the results and checks the task in the plan.
 
 ### Work report
 
 When the plan reaches the end, it builds a Markdown work report `report-<version>.md` from the state, timing records, the plan, and git.
 It does not have an LLM write any text; it lists only the facts in the records.
 
-- Overview (plan, period, and branch order per repository)
+- Overview (plan, period, and the PR to merge per repository)
 - Changes per task (branch, commits, changed files and line counts, expected line counts, review results, and the topics of the implementation decision log)
+- Tasks the implementer did without creating a branch
 - Deferred findings and the history of waiting for a human
 - Time spent (totals per role and step, and a breakdown per task)
 - Protected areas (what was declared and the command to see the diff)
 - The verification checklist and a field for overall comments
+
+`korylusflow` does not push, create PRs, or merge.
+After a human checks the work report, they create one PR per repository from the last task's branch to the first task's base branch and merge it with a merge commit.
+When the branches do not form a single line, for example because the previous task's branch no longer existed and the branch was recreated from the first base, the report shows a PR for each connected line.
 
 A human checks OK or NG for each checklist item and writes comments.
 If tasks are added to the plan and the loop runs again, it builds the next version at the end of the plan.

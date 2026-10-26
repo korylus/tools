@@ -143,6 +143,20 @@ func (f *Flow) readResults(v int) (*report.Results, error) {
 // readChangesは、タスクの記録recの元のブランチからタスクのブランチまでの変更を読む。
 // ブランチが消えているなどで読めなくても作業報告書は作れるよう、理由を残して続ける。
 func readChanges(ctx context.Context, rec state.TaskRecord) report.Changes {
+	var missing []string
+	for _, name := range []string{rec.Branch, rec.Base} {
+		ok, err := branch.Exists(ctx, rec.Repo, name)
+		if err != nil {
+			return report.Changes{Err: err.Error()}
+		}
+		if !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return report.Changes{Missing: missing}
+	}
+
 	commits, err := branch.Commits(ctx, rec.Repo, rec.Base, rec.Branch)
 	if err != nil {
 		return report.Changes{Err: err.Error()}

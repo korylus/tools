@@ -100,6 +100,17 @@ func TestResolve(t *testing.T) {
 		}
 	})
 
+	t.Run("[implementer]は実装者がブランチを作らずに行うタスクで、gitを使わない", func(t *testing.T) {
+		t.Parallel()
+		got, err := Resolve(ctx, "implementer")
+		if err != nil {
+			t.Fatalf("Resolveのエラー = %v", err)
+		}
+		if want := (Target{Implementer: true}); got != want {
+			t.Errorf("Resolve() = %+v、期待値 = %+v", got, want)
+		}
+	})
+
 	t.Run("無視されているディレクトリは重なっているパスとみなす", func(t *testing.T) {
 		t.Parallel()
 		for _, dir := range []string{"docs/private", "docs/private/plans"} {

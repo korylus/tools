@@ -27,7 +27,7 @@ func (e *DirtyError) Error() string {
 // developがあればdevelop、無ければmainを使う。
 func DefaultBase(ctx context.Context, repo string) (string, error) {
 	for _, name := range baseCandidates {
-		ok, err := branchExists(ctx, repo, name)
+		ok, err := Exists(ctx, repo, name)
 		if err != nil {
 			return "", err
 		}
@@ -50,7 +50,7 @@ func Prepare(ctx context.Context, repo, name, base string, exclude []string) err
 		return &DirtyError{Repo: repo, Files: files}
 	}
 
-	exists, err := branchExists(ctx, repo, name)
+	exists, err := Exists(ctx, repo, name)
 	if err != nil {
 		return err
 	}
@@ -97,8 +97,8 @@ func Ahead(ctx context.Context, repo, base string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(out))
 }
 
-// branchExistsは、リポジトリrepoにブランチnameがあるかどうかを返す。
-func branchExists(ctx context.Context, repo, name string) (bool, error) {
+// Existsは、リポジトリrepoにローカルのブランチnameがあるかどうかを返す。
+func Exists(ctx context.Context, repo, name string) (bool, error) {
 	_, err := git(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+name)
 	var exitErr *exec.ExitError
 	switch {

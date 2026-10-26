@@ -4,6 +4,7 @@
 //
 //	[/workspace/go] など / で始まるもの  そのパスのディレクトリで作業する
 //	[Go]・[Rails]・接頭辞無し            /workspace/go・/workspace/rails・/workspace として読む
+//	[implementer]                        実装者がブランチを作らずに行うタスク
 //	[shimbaco] など上記以外              人が行うタスク
 //
 // 上記以外を人が行うタスクとして扱うのは、作業する人の名前の一覧を持たずに済ませ、
@@ -34,17 +35,23 @@ var legacyDirs = map[string]string{
 // リポジトリでブランチを切ってしまう。
 var ErrOverlaid = errors.New("作業するディレクトリに別のリポジトリが重なっています")
 
+// ImplementerPrefixは、実装者がブランチを作らずに行うタスクの接頭辞。
+// korylusflowの役割名 (implementer) に揃える。
+const ImplementerPrefix = "implementer"
+
 // Targetはタスクの対象。
 type Target struct {
 	// Humanは人が行うタスクかどうか。trueならDirとRepoは空。
 	Human bool
+	// Implementerは、実装者がブランチを作らずに行うタスクかどうか。trueならDirとRepoは空。
+	Implementer bool
 	// Dirは作業するディレクトリ、Repoはそのディレクトリを含むリポジトリのルート。
 	Dir  string
 	Repo string
 }
 
 // WorkDirは接頭辞prefix (角括弧を除いたもの) が表す作業するディレクトリを返す。
-// 人が行うタスクならhumanにtrueを返す。
+// 人が行うタスクならhumanにtrueを返す。ImplementerPrefixはResolveが先に読むため扱わない。
 func WorkDir(prefix string) (dir string, human bool) {
 	if strings.HasPrefix(prefix, "/") {
 		return filepath.Clean(prefix), false
@@ -59,6 +66,9 @@ func WorkDir(prefix string) (dir string, human bool) {
 // gitのリポジトリの中に無ければエラーを、別のリポジトリが重なっていれば
 // ErrOverlaidを包んだエラーを返す。
 func Resolve(ctx context.Context, prefix string) (Target, error) {
+	if prefix == ImplementerPrefix {
+		return Target{Implementer: true}, nil
+	}
 	dir, human := WorkDir(prefix)
 	if human {
 		return Target{Human: true}, nil

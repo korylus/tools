@@ -60,7 +60,9 @@ type Input struct {
 type Changes struct {
 	Commits []branch.Commit
 	Files   []branch.FileChange
-	// Errは変更を読めなかった理由。読めたら空文字。
+	// Missingは、ローカルに残っていないため変更を読めなかったブランチ。
+	Missing []string
+	// Errは、Missing以外の理由で変更を読めなかったときの理由。読めたら空文字。
 	Err string
 }
 
@@ -73,6 +75,8 @@ type builder struct {
 	records []state.TaskRecord
 	// addedは、この版の期間に記録したステップがあるタスク。
 	added map[string]bool
+	// worksは、実装者がブランチを作らずに行ったタスク ([implementer]) の番号を、進めた順に並べたもの。
+	works []string
 }
 
 // Buildは作業報告書1版をMarkdownで組み立てる。
@@ -80,6 +84,7 @@ func Build(in Input) []byte {
 	b := newBuilder(in)
 	b.overview()
 	b.taskChanges()
+	b.implementerTasks()
 	b.deferred()
 	b.waits()
 	b.timing()
@@ -107,6 +112,12 @@ func newBuilder(in Input) *builder {
 			b.records = append(b.records, rec)
 		}
 	}
+	// 実装のステップを記録したのに記録を持たないタスクは、ブランチを作らずに行ったタスク。
+	for _, e := range in.Events {
+		if e.Step == state.StepImplement && in.State.TaskRecord(e.Task) == nil && !slices.Contains(b.works, e.Task) {
+			b.works = append(b.works, e.Task)
+		}
+	}
 	return b
 }
 
@@ -131,27 +142,65 @@ func (b *builder) overview() {
 		}
 	}
 
-	b.f("\n### ブランチの順序\n\n")
+	b.f("\n### マージするPR\n\n")
 	if len(b.records) == 0 {
 		b.f("ブランチを作ったタスクはありません。\n\n")
 		return
 	}
-	b.f("pushとPRの作成は、リポジトリごとにこの順で、各ブランチの元のブランチをベースにして行ってください。\n\n")
-	b.f("| リポジトリ | タスク | ブランチ | 元のブランチ |\n| --- | --- | --- | --- |\n")
+	b.f("リポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n\n")
+	b.f("| リポジトリ | PRにするブランチ | ベース | 含むタスク |\n| --- | --- | --- | --- |\n")
+	split := false
+	for _, c := range b.chains() {
+		head := code(c.head.Branch)
+		if slices.Contains(b.in.Changes[c.head.ID].Missing, c.head.Branch) {
+			head += " (ローカルに残っていません)"
+		}
+		b.f("| %s | %s | %s | %s |\n", code(c.head.Repo), head, code(c.base), strings.Join(c.tasks, "・"))
+		split = split || c.split
+	}
+	if split {
+		b.f("\n同じリポジトリに複数の行があるときは、ブランチが1本に繋がっていません (前のタスクのブランチが残っておらず、最初のベースから作り直したなど)。\n")
+		b.f("上の行から順に、まだマージしていないものをマージしてください。\n")
+	}
+	b.f("\n")
+}
+
+// chainは、1つのPRにまとめてマージする、元のブランチで1本に繋がったタスクのブランチの並び。
+type chain struct {
+	// headはPRにするブランチを持つ、並びの最後のタスクの記録。
+	head state.TaskRecord
+	// baseは並びの最初のタスクの元のブランチで、PRのベースにする。
+	base  string
+	tasks []string
+	// splitは、同じリポジトリの前の並びと繋がっていない並びかどうか。
+	split bool
+}
+
+// chainsは、作業報告書に載せるタスクを、リポジトリごとに元のブランチで繋がった並びにまとめる。
+// リポジトリは最初にタスクを進めた順、並びはリポジトリの中でタスクを進めた順に並べる。
+func (b *builder) chains() []chain {
 	var repos []string
 	for _, rec := range b.records {
 		if !slices.Contains(repos, rec.Repo) {
 			repos = append(repos, rec.Repo)
 		}
 	}
+	var chains []chain
 	for _, repo := range repos {
+		first := len(chains)
 		for _, rec := range b.records {
-			if rec.Repo == repo {
-				b.f("| %s | %s | %s | %s |\n", code(rec.Repo), rec.ID, code(rec.Branch), code(rec.Base))
+			if rec.Repo != repo {
+				continue
 			}
+			if last := len(chains) - 1; last >= first && chains[last].head.Branch == rec.Base {
+				chains[last].head = rec
+				chains[last].tasks = append(chains[last].tasks, rec.ID)
+				continue
+			}
+			chains = append(chains, chain{head: rec, base: rec.Base, tasks: []string{rec.ID}, split: len(chains) > first})
 		}
 	}
-	b.f("\n")
+	return chains
 }
 
 func (b *builder) taskChanges() {
@@ -170,9 +219,16 @@ func (b *builder) taskChanges() {
 		b.f("- リポジトリ: %s (作業するディレクトリ: %s)\n", code(rec.Repo), code(rec.Dir))
 		b.f("- ブランチ: %s (元: %s)\n", code(rec.Branch), code(rec.Base))
 		ch := b.in.Changes[rec.ID]
-		if ch.Err != "" {
+		switch {
+		case len(ch.Missing) > 0:
+			names := make([]string, len(ch.Missing))
+			for i, name := range ch.Missing {
+				names[i] = code(name)
+			}
+			b.f("- 変更: ブランチ %s がローカルに残っていないため示せません\n", strings.Join(names, "・"))
+		case ch.Err != "":
 			b.f("- 変更: 読めません (%s)\n", cell(ch.Err))
-		} else {
+		default:
 			impl, test := lineCounts(ch.Files)
 			b.f("- 変更行数: テスト以外%d行、テスト%d行 (追加と削除の合計)\n", impl, test)
 		}
@@ -208,6 +264,25 @@ func (b *builder) taskChanges() {
 		}
 		b.f("\n")
 	}
+}
+
+// implementerTasksは、実装者がブランチを作らずに行ったタスクを並べる。ブランチの差分が
+// 無いため変更の欄を持たず、結果は人が確かめて計画書にチェックを付けている。
+func (b *builder) implementerTasks() {
+	b.f("## 実装者が行ったタスク\n\n")
+	if len(b.works) == 0 {
+		b.f("なし\n\n")
+		return
+	}
+	b.f("ブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n")
+	for _, id := range b.works {
+		b.f("- %s", cell(taskLabel(id, b.tasks[id])))
+		if b.in.Version > 1 && b.added[id] {
+			b.f(" (この版で進めたタスク)")
+		}
+		b.f("\n")
+	}
+	b.f("\n")
 }
 
 func (b *builder) deferred() {

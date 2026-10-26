@@ -183,6 +183,9 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	switch st.Step {
 	case state.StepImplement:
 		in.Action = ActionImplement
+		if in.Record == nil {
+			in.Action = ActionWork
+		}
 	case state.StepReview:
 		in.Action = ActionReview
 		in.ReviewNumber, in.ReviewDoc = len(in.Record.Reviews)+1, ""
@@ -198,7 +201,8 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 
 // Doneは役割roleが進めているステップの完了を記録し、次のステップを決めて書き込む。
 // 完了の条件を満たさなければ、何も書き込まずに*RejectedErrorを返す。
-// 実装のステップでは、inputから動作確認の項目をJSONの配列で読む。
+// ブランチを作る実装タスクでは、inputから動作確認の項目をJSONの配列で読む。
+// [implementer] のタスクでは、計画書のチェックを確かめ、inputは読まない。
 // 戻り値は、次のステップを伝える文面。
 func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (string, error) {
 	unlock, err := f.Dir.LockContext(ctx)
@@ -250,26 +254,32 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 
 	// 各ステップの完了を確かめ、次のステップを決める。条件を満たさなければ、
 	// 状態を書き込まずに*RejectedErrorを返す。
-	switch st.Step {
-	case state.StepImplement:
+	switch {
+	case st.Step == state.StepImplement && rec == nil:
+		// 実装者がブランチを作らずに行うタスクは、人が結果を確かめてチェックを付けたら完了にする。
+		if t, ok := findTask(doc.Plan, st.Task); !ok || !t.Done {
+			return "", reject("計画書のタスク %s にチェックが付いていません。作業の結果を人に示し、確かめてチェックを付けるよう頼んでください", st.Task)
+		}
+		clearStep(st)
+	case st.Step == state.StepImplement:
 		if err := f.checkImplement(ctx, st, doc.Plan, input); err != nil {
 			return "", err
 		}
 		if err := f.startReview(ctx, st, rec, now); err != nil {
 			return "", err
 		}
-	case state.StepReview:
+	case st.Step == state.StepReview:
 		if err := f.finishReview(ctx, st, rec, now); err != nil {
 			return "", err
 		}
-	case state.StepFix:
+	case st.Step == state.StepFix:
 		if err := checkFix(ctx, rec); err != nil {
 			return "", err
 		}
 		if err := f.afterFix(ctx, st, rec, now); err != nil {
 			return "", err
 		}
-	case state.StepAsk:
+	case st.Step == state.StepAsk:
 		if err := f.finishAsk(ctx, st, doc.Plan, rec, now); err != nil {
 			return "", err
 		}
@@ -432,6 +442,13 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 		setAsk(st, state.AskHumanTask, "人が行うタスクです", fmt.Sprintf("%s %s", t.ID, t.Title))
 		return
 	}
+	// 実装者がブランチを作らずに行うタスクは、記録を持たない実装のステップにする。
+	// ブランチを準備せず、記録が無いことで指示と完了の条件を見分ける。
+	if target.Implementer {
+		removeTaskRecord(st, t.ID)
+		st.Step = state.StepImplement
+		return
+	}
 
 	rec := st.TaskRecord(t.ID)
 	// 人が接頭辞を直したときは、前に求めた記録を捨てて求め直す。
@@ -439,18 +456,21 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 		removeTaskRecord(st, t.ID)
 		rec = nil
 	}
-	if rec == nil {
-		base := previousBranch(st, target.Repo)
-		if base == "" {
-			if base, err = branch.DefaultBase(ctx, target.Repo); err != nil {
-				setAsk(st, state.AskBranch, "ブランチを作る元のブランチを決められません", err.Error())
-				return
-			}
+	// まだ準備できていないタスクは、前に求めた元のブランチが人の対応の間に消えて
+	// いることがあるため、準備するたびに求め直す。
+	if rec == nil || !rec.Prepared {
+		var base string
+		if base, err = baseBranch(ctx, st, target.Repo); err != nil {
+			setAsk(st, state.AskBranch, "ブランチを作る元のブランチを決められません", err.Error())
+			return
 		}
-		st.Tasks = append(st.Tasks, state.TaskRecord{
-			ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: f.Name + "-" + t.ID, Base: base,
-		})
-		rec = &st.Tasks[len(st.Tasks)-1]
+		if rec == nil {
+			st.Tasks = append(st.Tasks, state.TaskRecord{
+				ID: t.ID, Repo: target.Repo, Dir: target.Dir, Branch: f.Name + "-" + t.ID,
+			})
+			rec = &st.Tasks[len(st.Tasks)-1]
+		}
+		rec.Base = base
 	}
 
 	if err := branch.Prepare(ctx, rec.Repo, rec.Branch, rec.Base, excludedPaths); err != nil {
@@ -464,6 +484,22 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 	}
 	rec.Prepared = true
 	st.Step = state.StepImplement
+}
+
+// baseBranchは、リポジトリrepoで次のタスクのブランチを作る元のブランチを返す。
+// 前のタスクのブランチがローカルに残っていればそれを、無ければ (マージして消したなど)
+// そのリポジトリの最初のタスクと同じ元のブランチを返す。
+func baseBranch(ctx context.Context, st *state.State, repo string) (string, error) {
+	if prev := previousBranch(st, repo); prev != "" {
+		ok, err := branch.Exists(ctx, repo, prev)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return prev, nil
+		}
+	}
+	return branch.DefaultBase(ctx, repo)
 }
 
 // previousBranchは、同じリポジトリrepoで最後にブランチを準備できたタスクのブランチを返す。
