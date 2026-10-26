@@ -60,7 +60,7 @@ func TestFlowReport(t *testing.T) {
 	}
 	out := fx.readReport(t, 1)
 	for _, want := range []string{
-		"| `" + fx.repo + "` | 1-1 | `demo-1-1` | `main` |",
+		"| `" + fx.repo + "` | `demo-1-1` | `main` | 1-1 |",
 		"` feature_test.go\n",
 		"| `feature.go` | 1 | 0 |",
 		"- 変更行数: テスト以外1行、テスト1行",

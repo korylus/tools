@@ -133,27 +133,65 @@ func (b *builder) overview() {
 		}
 	}
 
-	b.f("\n### ブランチの順序\n\n")
+	b.f("\n### マージするPR\n\n")
 	if len(b.records) == 0 {
 		b.f("ブランチを作ったタスクはありません。\n\n")
 		return
 	}
-	b.f("pushとPRの作成は、リポジトリごとにこの順で、各ブランチの元のブランチをベースにして行ってください。\n\n")
-	b.f("| リポジトリ | タスク | ブランチ | 元のブランチ |\n| --- | --- | --- | --- |\n")
+	b.f("リポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n\n")
+	b.f("| リポジトリ | PRにするブランチ | ベース | 含むタスク |\n| --- | --- | --- | --- |\n")
+	split := false
+	for _, c := range b.chains() {
+		head := code(c.head.Branch)
+		if slices.Contains(b.in.Changes[c.head.ID].Missing, c.head.Branch) {
+			head += " (ローカルに残っていません)"
+		}
+		b.f("| %s | %s | %s | %s |\n", code(c.head.Repo), head, code(c.base), strings.Join(c.tasks, "・"))
+		split = split || c.split
+	}
+	if split {
+		b.f("\n同じリポジトリに複数の行があるときは、ブランチが1本に繋がっていません (前のタスクのブランチが残っておらず、最初のベースから作り直したなど)。\n")
+		b.f("上の行から順に、まだマージしていないものをマージしてください。\n")
+	}
+	b.f("\n")
+}
+
+// chainは、1つのPRにまとめてマージする、元のブランチで1本に繋がったタスクのブランチの並び。
+type chain struct {
+	// headはPRにするブランチを持つ、並びの最後のタスクの記録。
+	head state.TaskRecord
+	// baseは並びの最初のタスクの元のブランチで、PRのベースにする。
+	base  string
+	tasks []string
+	// splitは、同じリポジトリの前の並びと繋がっていない並びかどうか。
+	split bool
+}
+
+// chainsは、作業報告書に載せるタスクを、リポジトリごとに元のブランチで繋がった並びにまとめる。
+// リポジトリは最初にタスクを進めた順、並びはリポジトリの中でタスクを進めた順に並べる。
+func (b *builder) chains() []chain {
 	var repos []string
 	for _, rec := range b.records {
 		if !slices.Contains(repos, rec.Repo) {
 			repos = append(repos, rec.Repo)
 		}
 	}
+	var chains []chain
 	for _, repo := range repos {
+		first := len(chains)
 		for _, rec := range b.records {
-			if rec.Repo == repo {
-				b.f("| %s | %s | %s | %s |\n", code(rec.Repo), rec.ID, code(rec.Branch), code(rec.Base))
+			if rec.Repo != repo {
+				continue
 			}
+			if last := len(chains) - 1; last >= first && chains[last].head.Branch == rec.Base {
+				chains[last].head = rec
+				chains[last].tasks = append(chains[last].tasks, rec.ID)
+				continue
+			}
+			chains = append(chains, chain{head: rec, base: rec.Base, tasks: []string{rec.ID}, split: len(chains) > first})
 		}
 	}
-	b.f("\n")
+	return chains
 }
 
 func (b *builder) taskChanges() {

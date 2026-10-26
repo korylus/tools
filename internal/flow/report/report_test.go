@@ -105,7 +105,8 @@ func TestBuild(t *testing.T) {
 		"# 作業報告書 第1版: demo\n",
 		"- 計画書: `docs/private/plans/1_doing/demo.md`\n",
 		"- 計画書の開始: 2026-10-22 09:00 +00:00\n",
-		"| `/repo` | 1-1 | `demo-1-1` | `develop` |\n",
+		"### マージするPR\n\nリポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n",
+		"| `/repo` | `demo-1-1` | `develop` | 1-1 |\n",
 		"### 1-1 [/repo/go] 状態を作る\n",
 		"- 変更行数: テスト以外55行、テスト30行 (追加と削除の合計)\n",
 		"- 想定行数: 約100行 (実装60行 + テスト40行)\n",
@@ -162,7 +163,7 @@ func TestBuildNextVersion(t *testing.T) {
 		"- この版の期間: 2026-10-22 12:20 +00:00 〜 2026-10-22 14:00 +00:00\n",
 		"- 前の版: 第1版\n\n前の版の全体へのコメント:\n\n> フォントが小さい\n",
 		"### fb1-1 [/repo/go] 一覧を直す\n\nこの版で進めたタスクです。\n",
-		"| `/repo` | fb1-1 | `demo-fb1-1` | `demo-1-1` |\n",
+		"| `/repo` | `demo-fb1-1` | `develop` | 1-1・fb1-1 |\n",
 		"- この版の合計: 30分\n- 版をまたいだ合計: 2時間15分\n",
 		"### #1 statusを表示できる\n\n<!-- item: task/1-1/1 -->\n",
 		"- 前の版の結果: 第1版 #1 NG\n- 対応したフィードバックのタスク: fb1-1\n\n前の版のコメント:\n\n> 一覧が空だった\n",
@@ -226,6 +227,35 @@ func TestBuildUnreadableChanges(t *testing.T) {
 	in := newInput(t, testPlan)
 	in.Changes["1-1"] = Changes{Err: "git log が失敗しました\nunknown revision"}
 	assertContains(t, string(Build(in)), "- 変更: 読めません (git log が失敗しました unknown revision)\n")
+}
+
+func TestBuildMergePRs(t *testing.T) {
+	t.Parallel()
+
+	// /repoは1-2で前のブランチが消えて最初のベースから作り直したため、2本に分かれる。
+	in := newInput(t, testPlan)
+	in.State.Tasks = append(in.State.Tasks,
+		state.TaskRecord{ID: "1-2", Repo: "/repo", Dir: "/repo", Branch: "demo-1-2", Base: "develop", Prepared: true},
+		state.TaskRecord{ID: "1-3", Repo: "/tools", Dir: "/tools", Branch: "demo-1-3", Base: "main", Prepared: true},
+		state.TaskRecord{ID: "1-4", Repo: "/repo", Dir: "/repo", Branch: "demo-1-4", Base: "demo-1-2", Prepared: true},
+		state.TaskRecord{ID: "1-5", Repo: "/tools", Dir: "/tools", Branch: "demo-1-5", Base: "demo-1-3", Prepared: true},
+	)
+	for _, id := range []string{"1-2", "1-3", "1-4", "1-5"} {
+		in.Events = append(in.Events, state.Event{Task: id, Step: state.StepImplement, Role: state.RoleImplementer, Started: at(110), Ended: at(115)})
+	}
+	in.Changes["1-1"] = Changes{Missing: []string{"demo-1-1"}}
+	out := string(Build(in))
+	assertContains(t, out,
+		"| `/repo` | `demo-1-1` (ローカルに残っていません) | `develop` | 1-1 |\n"+
+			"| `/repo` | `demo-1-4` | `develop` | 1-2・1-4 |\n"+
+			"| `/tools` | `demo-1-5` | `main` | 1-3・1-5 |\n",
+		"同じリポジトリに複数の行があるときは、ブランチが1本に繋がっていません",
+	)
+
+	// 1本に繋がっていれば、繋がっていないときの説明を出さない。
+	if out := string(Build(newInput(t, testPlan))); strings.Contains(out, "1本に繋がっていません") {
+		t.Errorf("繋がっているのに説明を出している:\n%s", out)
+	}
 }
 
 func TestBuildMissingBranches(t *testing.T) {

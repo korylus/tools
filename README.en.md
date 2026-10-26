@@ -137,12 +137,16 @@ Task prefixes are read as follows.
 When the plan reaches the end, it builds a Markdown work report `report-<version>.md` from the state, timing records, the plan, and git.
 It does not have an LLM write any text; it lists only the facts in the records.
 
-- Overview (plan, period, and branch order per repository)
+- Overview (plan, period, and the PR to merge per repository)
 - Changes per task (branch, commits, changed files and line counts, expected line counts, review results, and the topics of the implementation decision log)
 - Deferred findings and the history of waiting for a human
 - Time spent (totals per role and step, and a breakdown per task)
 - Protected areas (what was declared and the command to see the diff)
 - The verification checklist and a field for overall comments
+
+`korylusflow` does not push, create PRs, or merge.
+After a human checks the work report, they create one PR per repository from the last task's branch to the first task's base branch and merge it with a merge commit.
+When the branches do not form a single line, for example because the previous task's branch no longer existed and the branch was recreated from the first base, the report shows a PR for each connected line.
 
 A human checks OK or NG for each checklist item and writes comments.
 If tasks are added to the plan and the loop runs again, it builds the next version at the end of the plan.
