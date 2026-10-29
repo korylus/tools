@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-26 -->
+<!-- last_synced: 2026-10-29 -->
 
 # korylus-tools
 
@@ -137,6 +137,27 @@ Use `[implementer]` tasks for work that the implementer can do without creating 
 It tells the implementer to do the work (`action: work`) without preparing a branch or adding a review.
 The implementer does not commit, gets the human's approval before irreversible operations, and shows the results to the human.
 The task is complete once the human checks the results and checks the task in the plan.
+
+When a task has a `**担当**:` (assignee) line under it, the prefix is read only as the path of the repository to create the branch in, and the assignee is read from the line's value.
+
+```markdown
+- [ ] **1-1**: [/workspace/go] マイグレーションを作る
+- [ ] **1-2**: ヘルプページの下書きを作る
+  - **担当**: implementer
+- [ ] **1-3**: ヘルプページの下書きを公開する
+  - **担当**: shimbaco
+```
+
+| Assignee line                   | Prefix                | Task                                                                |
+| ------------------------------- | --------------------- | ------------------------------------------------------------------- |
+| None                            | As in the table above | As in the table above                                               |
+| `implementer`                   | A path                | A task the implementer does by creating a branch in that repository |
+| `implementer`                   | None                  | A task the implementer does without creating a branch               |
+| Anything else (a person's name) | A path or none        | A task done by a human                                              |
+| Present                         | Not a path            | Ask the human (the prefix and the assignee line disagree)           |
+
+A task with more than one assignee line, or with an empty value, is an error that stops the plan from being read.
+`korylusflow status` and the work report show the assignee of tasks that have the line (for example, `1-2 ヘルプページの下書きを作る (担当: implementer)`).
 
 ### Work report
 

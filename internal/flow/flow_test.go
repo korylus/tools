@@ -672,6 +672,69 @@ func TestFlowMissingPreviousBranch(t *testing.T) {
 	})
 }
 
+func TestFlowAssignee(t *testing.T) {
+	t.Parallel()
+
+	t.Run("担当がimplementerでパスの接頭辞ならブランチを作る", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク\n  - **担当**: implementer")
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Record == nil || in.Record.Branch != "demo-1-1" {
+			t.Fatalf("指示 = %+v、ブランチ demo-1-1 の実装を期待", in)
+		}
+	})
+
+	t.Run("担当がimplementerで接頭辞無しならブランチを作らずに行う", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: 下書きを作る\n  - **担当**: implementer")
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionWork || in.Task != "1-1" || in.Record != nil {
+			t.Fatalf("指示 = %+v、記録を持たないタスク1-1の作業を期待", in)
+		}
+	})
+
+	t.Run("担当が人の名前ならパスの接頭辞でも人が行う", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: [{repo}] 下書きを公開する\n  - **担当**: shimbaco")
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionAsk || in.Ask.Kind != state.AskHumanTask || in.Record != nil {
+			t.Fatalf("指示 = %+v、人のタスクのaskと記録無しを期待", in)
+		}
+		if got := gitRun(t, fx.repo, "branch", "--list", "demo-1-1"); got != "" {
+			t.Errorf("ブランチ %q を作った", got)
+		}
+	})
+
+	t.Run("接頭辞がパスでなければ人に尋ね、直すまで受け付けない", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: [implementer] 下書きを作る\n  - **担当**: implementer")
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionAsk || in.Ask.Kind != state.AskBranch || in.Ask.Reason != "タスクの接頭辞と担当の行が食い違っています" {
+			t.Fatalf("指示 = %+v、接頭辞と担当の食い違いのaskを期待", in)
+		}
+		if !strings.Contains(in.String(), "接頭辞か担当の行を直したら続けられる") {
+			t.Errorf("指示に直し方が無い:\n%s", in.String())
+		}
+		_, err := fx.done(state.RoleImplementer, "")
+		assertRejected(t, err, "まだブランチを準備できません", "接頭辞 [implementer] がパスではありません")
+
+		src, err := os.ReadFile(fx.flow.PlanPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src = []byte(strings.Replace(string(src), "[implementer] ", "", 1))
+		if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+			t.Fatal(err)
+		}
+		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+			t.Fatalf("人への確認のDoneのエラー = %v", err)
+		}
+		if in := fx.wait(t, state.RoleImplementer); in.Action != ActionWork || in.Task != "1-1" {
+			t.Fatalf("指示 = %+v、タスク1-1の作業を期待", in)
+		}
+	})
+}
+
 func TestFlowImplementerTask(t *testing.T) {
 	t.Parallel()
 

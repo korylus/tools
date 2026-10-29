@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/korylus/tools/internal/flow/state"
+	"github.com/korylus/tools/internal/plan"
 )
 
 const testPlan = `# 計画書
@@ -185,6 +186,25 @@ func TestStatusErrors(t *testing.T) {
 			}
 			assertContains(t, stderr.String(), tt.wantStderr)
 		})
+	}
+}
+
+func TestTaskLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		task plan.Task
+		want string
+	}{
+		{task: plan.Task{ID: "1-1", Title: "接頭辞の無いタスク"}, want: "1-1 接頭辞の無いタスク"},
+		{task: plan.Task{ID: "1-2", Platform: "implementer", Title: "下書きを作る"}, want: "1-2 [implementer] 下書きを作る"},
+		{task: plan.Task{ID: "1-3", Title: "下書きを作る", Assignee: "implementer"}, want: "1-3 下書きを作る (担当: implementer)"},
+		{task: plan.Task{ID: "1-4", Platform: "/korylus-tools", Title: "直す", Assignee: "implementer"}, want: "1-4 [/korylus-tools] 直す (担当: implementer)"},
+	}
+	for _, tt := range tests {
+		if got := taskLabel(tt.task); got != tt.want {
+			t.Errorf("taskLabel(%+v) = %q、期待値 = %q", tt.task, got, tt.want)
+		}
 	}
 }
 

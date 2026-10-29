@@ -405,13 +405,17 @@ func (b *builder) protected() {
 
 // taskLabelはタスクを1行で表す。計画書から消えたタスクは番号だけにする。
 func taskLabel(id string, t plan.Task) string {
-	switch {
-	case t.Title == "":
+	if t.Title == "" {
 		return id
-	case t.Platform == "":
-		return id + " " + t.Title
 	}
-	return fmt.Sprintf("%s [%s] %s", id, t.Platform, t.Title)
+	label := id + " " + t.Title
+	if t.Platform != "" {
+		label = fmt.Sprintf("%s [%s] %s", id, t.Platform, t.Title)
+	}
+	if t.Assignee != "" {
+		label += fmt.Sprintf(" (担当: %s)", t.Assignee)
+	}
+	return label
 }
 
 func declLabel(d plan.Declaration) string {

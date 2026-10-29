@@ -68,7 +68,7 @@ func TestResolve(t *testing.T) {
 
 	t.Run("リポジトリのルート", func(t *testing.T) {
 		t.Parallel()
-		got, err := Resolve(ctx, root)
+		got, err := Resolve(ctx, root, "")
 		if err != nil {
 			t.Fatalf("Resolveのエラー = %v", err)
 		}
@@ -80,7 +80,7 @@ func TestResolve(t *testing.T) {
 	t.Run("リポジトリの中のディレクトリはルートを求める", func(t *testing.T) {
 		t.Parallel()
 		dir := filepath.Join(root, "go")
-		got, err := Resolve(ctx, dir)
+		got, err := Resolve(ctx, dir, "")
 		if err != nil {
 			t.Fatalf("Resolveのエラー = %v", err)
 		}
@@ -91,7 +91,7 @@ func TestResolve(t *testing.T) {
 
 	t.Run("人が行うタスクはgitを使わない", func(t *testing.T) {
 		t.Parallel()
-		got, err := Resolve(ctx, "shimbaco")
+		got, err := Resolve(ctx, "shimbaco", "")
 		if err != nil {
 			t.Fatalf("Resolveのエラー = %v", err)
 		}
@@ -102,7 +102,7 @@ func TestResolve(t *testing.T) {
 
 	t.Run("[implementer]は実装者がブランチを作らずに行うタスクで、gitを使わない", func(t *testing.T) {
 		t.Parallel()
-		got, err := Resolve(ctx, "implementer")
+		got, err := Resolve(ctx, "implementer", "")
 		if err != nil {
 			t.Fatalf("Resolveのエラー = %v", err)
 		}
@@ -114,7 +114,7 @@ func TestResolve(t *testing.T) {
 	t.Run("無視されているディレクトリは重なっているパスとみなす", func(t *testing.T) {
 		t.Parallel()
 		for _, dir := range []string{"docs/private", "docs/private/plans"} {
-			_, err := Resolve(ctx, filepath.Join(root, dir))
+			_, err := Resolve(ctx, filepath.Join(root, dir), "")
 			if !errors.Is(err, ErrOverlaid) {
 				t.Errorf("Resolve(%s)のエラー = %v、期待値 = ErrOverlaid", dir, err)
 			}
@@ -127,8 +127,61 @@ func TestResolve(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Resolve(ctx, outside); err == nil || errors.Is(err, ErrOverlaid) {
+		if _, err := Resolve(ctx, outside, ""); err == nil || errors.Is(err, ErrOverlaid) {
 			t.Errorf("Resolveのエラー = %v、リポジトリを求められないエラーを期待", err)
+		}
+	})
+}
+
+func TestResolve_Assignee(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := newRepo(t)
+	dir := filepath.Join(root, "go")
+
+	tests := []struct {
+		name     string
+		prefix   string
+		assignee string
+		want     Target
+	}{
+		{name: "implementerでパスはそのリポジトリでブランチを作る", prefix: dir + "/", assignee: "implementer", want: Target{Dir: dir, Repo: root}},
+		{name: "implementerで接頭辞無しはブランチを作らずに行う", prefix: "", assignee: "implementer", want: Target{Implementer: true}},
+		{name: "人の名前でパスは人が行う", prefix: dir, assignee: "shimbaco", want: Target{Human: true}},
+		{name: "人の名前で接頭辞無しは人が行う", prefix: "", assignee: "shimbaco", want: Target{Human: true}},
+		{name: "知らない担当は人が行う", prefix: "", assignee: "Implementer", want: Target{Human: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := Resolve(ctx, tt.prefix, tt.assignee)
+			if err != nil {
+				t.Fatalf("Resolveのエラー = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Resolve(%q, %q) = %+v、期待値 = %+v", tt.prefix, tt.assignee, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("接頭辞がパスでなければ食い違いのエラー", func(t *testing.T) {
+		t.Parallel()
+		for _, prefix := range []string{"implementer", "shimbaco", "Go", "Rails"} {
+			for _, assignee := range []string{"implementer", "shimbaco"} {
+				_, err := Resolve(ctx, prefix, assignee)
+				if !errors.Is(err, ErrAssigneeMismatch) {
+					t.Errorf("Resolve(%q, %q)のエラー = %v、期待値 = ErrAssigneeMismatch", prefix, assignee, err)
+				}
+			}
+		}
+	})
+
+	t.Run("implementerでも無視されているディレクトリは重なっているパスとみなす", func(t *testing.T) {
+		t.Parallel()
+		_, err := Resolve(ctx, filepath.Join(root, "docs/private"), "implementer")
+		if !errors.Is(err, ErrOverlaid) {
+			t.Errorf("Resolveのエラー = %v、期待値 = ErrOverlaid", err)
 		}
 	})
 }

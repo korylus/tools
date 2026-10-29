@@ -164,7 +164,7 @@ func (in Instruction) writeAsk(b *strings.Builder) {
 	case state.AskHumanTask:
 		hint = "人がタスクを済ませ、計画書のタスクにチェックを付けたら続けられる"
 	case state.AskBranch:
-		hint = "人が作業ツリーの変更を片付けるか、計画書のタスクの接頭辞を直したら続けられる"
+		hint = "人が作業ツリーの変更を片付けるか、計画書のタスクの接頭辞か担当の行を直したら続けられる"
 	case state.AskReview:
 		hint = "人がレビュードキュメントで、挙げた指摘の対応方針を選んだら続けられる"
 	case state.AskReviewLimit:

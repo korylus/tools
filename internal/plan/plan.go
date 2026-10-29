@@ -1,7 +1,7 @@
 // Package planは作業計画書のタスクリストを読み取る。
 //
 // 読み取るのは「## タスクリスト」節のトップレベルのタスク行と、その下の
-// `**保護領域**:` / `**想定行数**:` / `**対応する確認項目**:` の行と、最初の節より前の
+// `**担当**:` / `**保護領域**:` / `**想定行数**:` / `**対応する確認項目**:` の行と、最初の節より前の
 // `**計画書名**:` の行に限る。
 // HTMLコメントとコードブロックの中は、書式の例を誤って拾わないよう読み飛ばす。
 package plan
@@ -67,6 +67,8 @@ type Task struct {
 	Platform string
 	// Titleはプラットフォーム接頭辞を除いたタスク名。
 	Title string
+	// Assigneeはタスクの下の `**担当**:` の行に書かれた担当。行が無ければ空文字。
+	Assignee string
 	// Protectedは宣言された保護領域。宣言が無ければ空。
 	Protected []Declaration
 	// Linesは想定行数。記載が無ければゼロ値。
@@ -170,6 +172,7 @@ func Parse(src string) (*Plan, error) {
 	p := &Plan{}
 	var errs []error
 	seen := map[string]int{}
+	assigneeLines := map[string]int{}
 	inSection, inComment, beforeSections := false, false, true
 	nameLineNo := 0
 	var cur *Task
@@ -245,6 +248,17 @@ func Parse(src string) (*Plan, error) {
 			continue
 		}
 		switch m[1] {
+		case "担当":
+			value := strings.TrimSpace(m[2])
+			switch prev, dup := assigneeLines[cur.ID]; {
+			case dup:
+				errs = append(errs, fmt.Errorf("%d行目: タスク %s の担当の行が重複しています (%d行目と同じ)", lineNo, cur.ID, prev))
+			case value == "":
+				errs = append(errs, fmt.Errorf("%d行目: タスク %s の担当が空です", lineNo, cur.ID))
+			default:
+				cur.Assignee = value
+			}
+			assigneeLines[cur.ID] = lineNo
 		case "保護領域":
 			decls, err := parseDeclarations(m[2])
 			if err != nil {

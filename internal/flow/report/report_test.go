@@ -382,6 +382,26 @@ func TestCode(t *testing.T) {
 	}
 }
 
+func TestTaskLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		id   string
+		task plan.Task
+		want string
+	}{
+		{id: "1-1", task: plan.Task{}, want: "1-1"},
+		{id: "1-2", task: plan.Task{Platform: "shimbaco", Title: "タグを付ける"}, want: "1-2 [shimbaco] タグを付ける"},
+		{id: "1-3", task: plan.Task{Title: "下書きを公開する", Assignee: "shimbaco"}, want: "1-3 下書きを公開する (担当: shimbaco)"},
+		{id: "1-4", task: plan.Task{Platform: "/korylus-tools", Title: "直す", Assignee: "implementer"}, want: "1-4 [/korylus-tools] 直す (担当: implementer)"},
+	}
+	for _, tt := range tests {
+		if got := taskLabel(tt.id, tt.task); got != tt.want {
+			t.Errorf("taskLabel(%q, %+v) = %q、期待値 = %q", tt.id, tt.task, got, tt.want)
+		}
+	}
+}
+
 func TestBuildImplementerTasks(t *testing.T) {
 	t.Parallel()
 
