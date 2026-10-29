@@ -420,3 +420,52 @@ func TestBuildImplementerTasks(t *testing.T) {
 	out = string(Build(in))
 	assertContains(t, out, "## 実装者が行ったタスク\n\nブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n- 0-1\n- 2-1 (この版で進めたタスク)\n")
 }
+
+func TestBuildAssignee(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		work        bool
+		want        string
+	}{
+		{
+			name:        "人の担当を人を待った履歴に表示する",
+			old:         "- [x] **1-2**: [shimbaco] タグを付ける",
+			replacement: "- [x] **1-2**: タグを付ける\n  - **担当**: shimbaco",
+			want:        "| 1-2 タグを付ける (担当: shimbaco) | 実装者 | 人が行うタスクです |",
+		},
+		{
+			name:        "ブランチを作る実装者の担当を変更の見出しに表示する",
+			old:         "- [x] **1-1**: [/repo/go] 状態を作る",
+			replacement: "- [x] **1-1**: [/repo/go] 状態を作る\n  - **担当**: implementer",
+			want:        "### 1-1 [/repo/go] 状態を作る (担当: implementer)\n",
+		},
+		{
+			name:        "ブランチを作らない実装者の担当をタスク一覧に表示する",
+			old:         "- [x] **1-2**: [shimbaco] タグを付ける",
+			replacement: "- [x] **1-2**: 下書きを作る\n  - **担当**: implementer",
+			work:        true,
+			want:        "- 1-2 下書きを作る (担当: implementer)\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			src := strings.Replace(testPlan, tt.old, tt.replacement, 1)
+			in := newInput(t, src)
+			if tt.work {
+				for i := range in.Events {
+					if in.Events[i].Task == "1-2" {
+						in.Events[i].Step = state.StepImplement
+						in.Events[i].Reason = ""
+					}
+				}
+			}
+			assertContains(t, string(Build(in)), tt.want)
+		})
+	}
+}

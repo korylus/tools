@@ -308,8 +308,12 @@ func (b *builder) waits() {
 		if e.Step != state.StepAsk {
 			continue
 		}
+		label := e.Task
+		if t := b.tasks[e.Task]; t.Assignee != "" {
+			label = cell(taskLabel(e.Task, t))
+		}
 		reason := cmp.Or(cell(e.Reason), "(記録なし)")
-		rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s | %s |\n", e.Task, e.Role.Label(), reason, e.Started.Format(timeLayout), formatDuration(e.Duration())))
+		rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s | %s |\n", label, e.Role.Label(), reason, e.Started.Format(timeLayout), formatDuration(e.Duration())))
 	}
 	if len(rows) == 0 {
 		b.f("なし\n\n")
