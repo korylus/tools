@@ -172,8 +172,12 @@ func formatDuration(d time.Duration) string {
 
 // taskLabelはタスクを1行で表す。
 func taskLabel(t plan.Task) string {
-	if t.Platform == "" {
-		return fmt.Sprintf("%s %s", t.ID, t.Title)
+	label := fmt.Sprintf("%s %s", t.ID, t.Title)
+	if t.Platform != "" {
+		label = fmt.Sprintf("%s [%s] %s", t.ID, t.Platform, t.Title)
 	}
-	return fmt.Sprintf("%s [%s] %s", t.ID, t.Platform, t.Title)
+	if t.Assignee != "" {
+		label += fmt.Sprintf(" (担当: %s)", t.Assignee)
+	}
+	return label
 }

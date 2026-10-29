@@ -432,9 +432,13 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 	}
 	st.Task, st.Role, st.Since = t.ID, state.RoleImplementer, f.Now()
 
-	target, err := branch.Resolve(ctx, t.Platform)
+	target, err := branch.Resolve(ctx, t.Platform, t.Assignee)
 	if err != nil {
-		setAsk(st, state.AskBranch, "タスクのリポジトリを求められません", err.Error())
+		reason := "タスクのリポジトリを求められません"
+		if errors.Is(err, branch.ErrAssigneeMismatch) {
+			reason = "タスクの接頭辞と担当の行が食い違っています"
+		}
+		setAsk(st, state.AskBranch, reason, err.Error())
 		return
 	}
 	if target.Human {

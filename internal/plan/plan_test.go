@@ -120,6 +120,16 @@ func TestParse_Invalid(t *testing.T) {
 			src:  "## タスクリスト\n\n- [ ] **1-1**: a\n  - **想定行数**: 約N行 (実装N行 + テストN行)\n",
 			want: "4行目: タスク 1-1 の想定行数: 「約N行」の形で書いてください",
 		},
+		{
+			name: "担当の行の重複",
+			src:  "## タスクリスト\n\n- [ ] **1-1**: a\n  - **担当**: implementer\n  - **担当**: shimbaco\n",
+			want: "5行目: タスク 1-1 の担当の行が重複しています (4行目と同じ)",
+		},
+		{
+			name: "担当が空",
+			src:  "## タスクリスト\n\n- [ ] **1-1**: a\n  - **担当**:\n",
+			want: "4行目: タスク 1-1 の担当が空です",
+		},
 	}
 
 	for _, tt := range tests {
@@ -134,6 +144,33 @@ func TestParse_Invalid(t *testing.T) {
 				t.Errorf("エラー = %q、含まれることを期待した文字列 = %q", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+func TestParse_Assignee(t *testing.T) {
+	t.Parallel()
+
+	src := "## タスクリスト\n\n" +
+		"- [ ] **1-1**: [/workspace/go] マイグレーションを作る\n" +
+		"  - **想定行数**: 約80行\n" +
+		"- [ ] **1-2**: ヘルプページの下書きを作る\n" +
+		"  - **担当**: implementer\n" +
+		"- [ ] **1-3**: ヘルプページの下書きを公開する\n" +
+		"  - **担当**:  shimbaco \n"
+	p, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parseのエラー = %v", err)
+	}
+	got := map[string]string{}
+	for _, task := range p.Tasks {
+		got[task.ID] = task.Assignee
+	}
+	want := map[string]string{"1-1": "", "1-2": "implementer", "1-3": "shimbaco"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("担当 = %v、期待値 = %v", got, want)
+	}
+	if p.Tasks[1].Platform != "" || p.Tasks[1].Title != "ヘルプページの下書きを作る" {
+		t.Errorf("1-2 = %+v、接頭辞無しのタスクを期待", p.Tasks[1])
 	}
 }
 
