@@ -84,6 +84,21 @@ func TestFlowWalkthroughSkipped(t *testing.T) {
 	}
 }
 
+func TestFlowReportWhilePendingWalkthrough(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t, "- [x] **1-1**: [shimbaco] タグを付ける")
+	now := time.Now()
+	st := &state.State{Pending: &state.Event{Step: state.StepWalkthrough, Role: state.RoleImplementer, Started: now.Add(-time.Minute), Ended: now}}
+	if err := fx.flow.Dir.Save(st, now); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fx.flow.Report(context.Background())
+	if err == nil || !strings.HasPrefix(err.Error(), "処理の流れの作成の完了を記録している途中です") {
+		t.Errorf("Report()のエラー = %v、処理の流れの作成の完了を記録している途中のエラーを期待", err)
+	}
+}
+
 func TestFlowWalkthroughCompatibility(t *testing.T) {
 	t.Parallel()
 

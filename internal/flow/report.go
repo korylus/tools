@@ -30,6 +30,9 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if st.Pending != nil && st.Pending.Step == state.StepWalkthrough {
+		return "", fmt.Errorf("%sの完了を記録している途中です。korylusflow wait か done で再開してから実行してください", st.Pending.Step.Label())
+	}
 	if st.Pending != nil {
 		return "", fmt.Errorf("タスク %s の完了を記録している途中です。korylusflow wait か done で再開してから実行してください", st.Pending.Task)
 	}
