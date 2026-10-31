@@ -211,7 +211,7 @@ func (b *builder) taskChanges() {
 			label += " (この版で進めたタスク)"
 		}
 		b.f("| %s | %s (元: %s) | %s | %s | %s |\n",
-			cell(label), code(rec.Branch), code(rec.Base), changedLines(b.in.Changes[rec.ID]), expected(t.Lines), reviewVerdicts(rec.Reviews))
+			cell(label), code(rec.Branch), code(rec.Base), changedLines(b.in.Changes[rec.ID]), cell(expected(t.Lines)), reviewVerdicts(rec.Reviews))
 	}
 	b.f("\n")
 }

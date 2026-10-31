@@ -1,9 +1,13 @@
 package report
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 
 	"github.com/korylus/tools/internal/flow/branch"
 	"github.com/korylus/tools/internal/flow/state"
@@ -467,4 +471,16 @@ func TestReviewVerdicts(t *testing.T) {
 			t.Errorf("reviewVerdicts(%+v) = %q、期待値 = %q", tt.reviews, got, tt.want)
 		}
 	}
+}
+
+func TestBuildEscapesExpectedLines(t *testing.T) {
+	t.Parallel()
+
+	src := strings.Replace(testPlan, "約100行 (実装60行 + テスト40行)", "約100行 (UI|UX100行)", 1)
+	out := Build(newInput(t, src))
+	var rendered bytes.Buffer
+	if err := goldmark.New(goldmark.WithExtensions(extension.Table)).Convert(out, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, rendered.String(), "<td>約100行 (UI|UX100行)</td>\n<td>Comment</td>")
 }
