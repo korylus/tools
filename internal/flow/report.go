@@ -89,7 +89,7 @@ func (f *Flow) writeReport(ctx context.Context, st *state.State, doc *planDoc, e
 	var err error
 	now := f.Now()
 	in := report.Input{
-		PlanPath: f.PlanPath, Name: f.Name, PlanSrc: doc.src, Plan: doc.Plan, Version: version, Now: now,
+		PlanPath: f.PlanPath, Name: f.Name, Plan: doc.Plan, Version: version, Now: now,
 		State: st, Events: events, Changes: map[string]report.Changes{},
 	}
 	if version > 1 {
@@ -157,15 +157,11 @@ func readChanges(ctx context.Context, rec state.TaskRecord) report.Changes {
 		return report.Changes{Missing: missing}
 	}
 
-	commits, err := branch.Commits(ctx, rec.Repo, rec.Base, rec.Branch)
-	if err != nil {
-		return report.Changes{Err: err.Error()}
-	}
 	files, err := branch.Changes(ctx, rec.Repo, rec.Base, rec.Branch)
 	if err != nil {
 		return report.Changes{Err: err.Error()}
 	}
-	return report.Changes{Commits: commits, Files: files}
+	return report.Changes{Files: files}
 }
 
 // latestReportは最新の版の作業報告書のパスを返す。まだ作っていなければ空文字。

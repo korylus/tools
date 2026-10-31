@@ -26,9 +26,6 @@ const timeLayout = "2006-01-02 15:04 -07:00"
 // constraintsSectionは、保護領域の変更が沿うべき方針を書いた計画書の節の名前。
 const constraintsSection = "合意済みの設計制約"
 
-// stepsは所要時間の節でステップを並べる順序。
-var steps = []state.Step{state.StepImplement, state.StepReview, state.StepFix, state.StepAsk}
-
 // partOrderは想定行数の内訳を並べる順序。
 var partOrder = []string{"実装", "テスト"}
 
@@ -38,8 +35,7 @@ type Input struct {
 	PlanPath string
 	// Nameは計画書名。見出しに使う。
 	Name string
-	// PlanSrcは計画書の内容、Planはそれを読み取ったもの。
-	PlanSrc string
+	// Planは計画書を読み取ったもの。
 	Plan    *plan.Plan
 	Version int
 	Now     time.Time
@@ -58,8 +54,7 @@ type Input struct {
 
 // Changesはタスク1件のブランチの変更。
 type Changes struct {
-	Commits []branch.Commit
-	Files   []branch.FileChange
+	Files []branch.FileChange
 	// Missingは、ローカルに残っていないため変更を読めなかったブランチ。
 	Missing []string
 	// Errは、Missing以外の理由で変更を読めなかったときの理由。読めたら空文字。
@@ -86,8 +81,6 @@ func Build(in Input) []byte {
 	b.taskChanges()
 	b.implementerTasks()
 	b.deferred()
-	b.waits()
-	b.timing()
 	b.protected()
 	b.checklist()
 	return []byte(b.String())
@@ -209,61 +202,47 @@ func (b *builder) taskChanges() {
 		b.f("なし\n\n")
 		return
 	}
-	topics := plan.DecisionTopics(b.in.PlanSrc)
+	b.f("変更行数は、元のブランチからタスクのブランチまでの追加と削除の合計です。\n\n")
+	b.f("| タスク | ブランチ | 変更行数 | 想定行数 | レビュー |\n| --- | --- | --- | --- | --- |\n")
 	for _, rec := range b.records {
 		t := b.tasks[rec.ID]
-		b.f("### %s\n\n", cell(taskLabel(rec.ID, t)))
+		label := taskLabel(rec.ID, t)
 		if b.in.Version > 1 && b.added[rec.ID] {
-			b.f("この版で進めたタスクです。\n\n")
+			label += " (この版で進めたタスク)"
 		}
-		b.f("- リポジトリ: %s (作業するディレクトリ: %s)\n", code(rec.Repo), code(rec.Dir))
-		b.f("- ブランチ: %s (元: %s)\n", code(rec.Branch), code(rec.Base))
-		ch := b.in.Changes[rec.ID]
-		switch {
-		case len(ch.Missing) > 0:
-			names := make([]string, len(ch.Missing))
-			for i, name := range ch.Missing {
-				names[i] = code(name)
-			}
-			b.f("- 変更: ブランチ %s がローカルに残っていないため示せません\n", strings.Join(names, "・"))
-		case ch.Err != "":
-			b.f("- 変更: 読めません (%s)\n", cell(ch.Err))
-		default:
-			impl, test := lineCounts(ch.Files)
-			b.f("- 変更行数: テスト以外%d行、テスト%d行 (追加と削除の合計)\n", impl, test)
-		}
-		b.f("- 想定行数: %s\n", expected(t.Lines))
-
-		if len(ch.Commits) > 0 {
-			b.f("\nコミット:\n\n")
-			for _, c := range ch.Commits {
-				b.f("- %s %s\n", code(c.Hash), cell(c.Subject))
-			}
-		}
-		if len(ch.Files) > 0 {
-			b.f("\n変更ファイル:\n\n| ファイル | 追加 | 削除 |\n| --- | --: | --: |\n")
-			for _, fc := range ch.Files {
-				if fc.Binary {
-					b.f("| %s | - | - |\n", code(fc.Path))
-				} else {
-					b.f("| %s | %d | %d |\n", code(fc.Path), fc.Added, fc.Removed)
-				}
-			}
-		}
-		if len(rec.Reviews) > 0 {
-			b.f("\nレビュー:\n\n| 回 | 役割 | 評価 | レビュードキュメント |\n| --: | --- | --- | --- |\n")
-			for _, rv := range rec.Reviews {
-				b.f("| %d | %s | %s | %s |\n", rv.Number, rv.Role.Label(), rv.Verdict, code(rv.Doc))
-			}
-		}
-		if ts := topics[rec.ID]; len(ts) > 0 {
-			b.f("\n実装判断ログの論点:\n\n")
-			for _, topic := range ts {
-				b.f("- %s\n", cell(topic))
-			}
-		}
-		b.f("\n")
+		b.f("| %s | %s (元: %s) | %s | %s | %s |\n",
+			cell(label), code(rec.Branch), code(rec.Base), changedLines(b.in.Changes[rec.ID]), expected(t.Lines), reviewVerdicts(rec.Reviews))
 	}
+	b.f("\n")
+}
+
+// changedLinesは、タスクのブランチの変更行数を表のセルに入れる形で表す。
+// 変更を読めなかったときは、その理由を書く。
+func changedLines(ch Changes) string {
+	switch {
+	case len(ch.Missing) > 0:
+		names := make([]string, len(ch.Missing))
+		for i, name := range ch.Missing {
+			names[i] = code(name)
+		}
+		return fmt.Sprintf("ブランチ %s がローカルに残っていないため示せません", strings.Join(names, "・"))
+	case ch.Err != "":
+		return fmt.Sprintf("読めません (%s)", cell(ch.Err))
+	}
+	impl, test := lineCounts(ch.Files)
+	return fmt.Sprintf("テスト以外%d行・テスト%d行", impl, test)
+}
+
+// reviewVerdictsは、タスクのレビューの評価を回の順に矢印でつなぐ。
+func reviewVerdicts(reviews []state.ReviewRecord) string {
+	if len(reviews) == 0 {
+		return "なし"
+	}
+	verdicts := make([]string, len(reviews))
+	for i, rv := range reviews {
+		verdicts[i] = cell(rv.Verdict)
+	}
+	return strings.Join(verdicts, " → ")
 }
 
 // implementerTasksは、実装者がブランチを作らずに行ったタスクを並べる。ブランチの差分が
@@ -299,89 +278,6 @@ func (b *builder) deferred() {
 	}
 	b.f("コードを変更しない方針を選んだ指摘です。\n後続のタスクにするかは人が決めます。\n\n")
 	b.f("| タスク | 指摘 | 選んだ対応方針 | レビュードキュメント |\n| --- | --- | --- | --- |\n%s\n", strings.Join(rows, ""))
-}
-
-func (b *builder) waits() {
-	b.f("## 人を待った履歴\n\n")
-	var rows []string
-	for _, e := range b.in.Events {
-		if e.Step != state.StepAsk {
-			continue
-		}
-		label := e.Task
-		if t := b.tasks[e.Task]; t.Assignee != "" {
-			label = cell(taskLabel(e.Task, t))
-		}
-		reason := cmp.Or(cell(e.Reason), "(記録なし)")
-		rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s | %s |\n", label, e.Role.Label(), reason, e.Started.Format(timeLayout), formatDuration(e.Duration())))
-	}
-	if len(rows) == 0 {
-		b.f("なし\n\n")
-		return
-	}
-	b.f("| タスク | 尋ねた役割 | 理由 | 開始 | 待った時間 |\n| --- | --- | --- | --- | --: |\n%s\n", strings.Join(rows, ""))
-}
-
-func (b *builder) timing() {
-	b.f("## 所要時間\n\n")
-	if len(b.in.Events) == 0 {
-		b.f("記録なし\n\n")
-		return
-	}
-	type key struct {
-		role state.Role
-		step state.Step
-	}
-	type sum struct {
-		count          int
-		version, total time.Duration
-	}
-	sums := map[key]*sum{}
-	perTask := map[string]map[state.Step]time.Duration{}
-	var order []string
-	var versionTotal, total time.Duration
-	for i, e := range b.in.Events {
-		d := max(e.Duration(), 0)
-		k := key{e.Role, e.Step}
-		if sums[k] == nil {
-			sums[k] = &sum{}
-		}
-		s := sums[k]
-		s.total += d
-		total += d
-		if i >= b.in.Since {
-			s.count++
-			s.version += d
-			versionTotal += d
-		}
-		if perTask[e.Task] == nil {
-			perTask[e.Task] = map[state.Step]time.Duration{}
-			order = append(order, e.Task)
-		}
-		perTask[e.Task][e.Step] += d
-	}
-
-	b.f("- この版の合計: %s\n- 版をまたいだ合計: %s\n\n", formatDuration(versionTotal), formatDuration(total))
-	b.f("### 役割・ステップごとの合計\n\n| 役割 | ステップ | 回数 (この版) | この版 | 版をまたいだ合計 |\n| --- | --- | --: | --: | --: |\n")
-	for _, r := range state.Roles {
-		for _, st := range steps {
-			if s := sums[key{r, st}]; s != nil {
-				b.f("| %s | %s | %d | %s | %s |\n", r.Label(), st.Label(), s.count, formatDuration(s.version), formatDuration(s.total))
-			}
-		}
-	}
-	b.f("\n### タスクごとの内訳\n\n人を待った時間は、人への確認のステップの時間です。\n\n")
-	b.f("| タスク | 実装 | レビュー | 修正 | 人を待った時間 | 合計 |\n| --- | --: | --: | --: | --: | --: |\n")
-	for _, id := range order {
-		var sum time.Duration
-		cols := make([]string, 0, len(steps))
-		for _, st := range steps {
-			sum += perTask[id][st]
-			cols = append(cols, formatDuration(perTask[id][st]))
-		}
-		b.f("| %s | %s | %s |\n", id, strings.Join(cols, " | "), formatDuration(sum))
-	}
-	b.f("\n")
 }
 
 func (b *builder) protected() {
@@ -491,16 +387,6 @@ func earliest(events []state.Event) time.Time {
 		}
 	}
 	return t
-}
-
-// formatDurationは所要時間を分単位に丸めて表す。
-func formatDuration(d time.Duration) string {
-	d = d.Round(time.Minute)
-	h, m := int(d.Hours()), int(d.Minutes())%60
-	if h > 0 {
-		return fmt.Sprintf("%d時間%d分", h, m)
-	}
-	return fmt.Sprintf("%d分", m)
 }
 
 // cellは、表のセルやリストの1行に入れる文字列から、改行と表の区切りを除く。

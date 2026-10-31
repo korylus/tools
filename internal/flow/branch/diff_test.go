@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestCommitsAndChanges(t *testing.T) {
+func TestChanges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -26,21 +26,6 @@ func TestCommitsAndChanges(t *testing.T) {
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "--quiet", "-m", "ベースを進める")
 
-	commits, err := Commits(ctx, repo, "main", "task")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var subjects []string
-	for _, c := range commits {
-		if c.Hash == "" {
-			t.Errorf("コミットのハッシュが空: %+v", c)
-		}
-		subjects = append(subjects, c.Subject)
-	}
-	if want := []string{"追加する", "名前を変える"}; !slices.Equal(subjects, want) {
-		t.Errorf("コミット = %v、期待値 = %v", subjects, want)
-	}
-
 	files, err := Changes(ctx, repo, "main", "task")
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +40,7 @@ func TestCommitsAndChanges(t *testing.T) {
 		t.Errorf("変更 = %+v、期待値 = %+v", files, want)
 	}
 
-	if _, err := Commits(ctx, repo, "main", "missing"); err == nil {
+	if _, err := Changes(ctx, repo, "main", "missing"); err == nil {
 		t.Error("無いブランチでエラーを期待したが、nilだった")
 	}
 }

@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-29 -->
+<!-- last_synced: 2026-10-31 -->
 
 # korylus-tools
 
@@ -165,12 +165,13 @@ When the plan reaches the end, it builds a Markdown work report `report-<version
 It does not have an LLM write any text; it lists only the facts in the records.
 
 - Overview (plan, period, and the PR to merge per repository)
-- Changes per task (branch, commits, changed files and line counts, expected line counts, review results, and the topics of the implementation decision log)
+- Changes per task (a table with one row per task: branch, changed line counts, expected line counts, and review verdicts)
 - Tasks the implementer did without creating a branch
-- Deferred findings and the history of waiting for a human
-- Time spent (totals per role and step, and a breakdown per task)
+- Deferred findings
 - Protected areas (what was declared and the command to see the diff)
 - The verification checklist and a field for overall comments
+
+Time spent and time spent waiting for a human are not in the work report; `korylusflow status` shows them.
 
 `korylusflow` does not push, create PRs, or merge.
 After a human checks the work report, they create one PR per repository from the last task's branch to the first task's base branch and merge it with a merge commit.

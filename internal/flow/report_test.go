@@ -61,10 +61,7 @@ func TestFlowReport(t *testing.T) {
 	out := fx.readReport(t, 1)
 	for _, want := range []string{
 		"| `" + fx.repo + "` | `demo-1-1` | `main` | 1-1 |",
-		"` feature_test.go\n",
-		"| `feature.go` | 1 | 0 |",
-		"- 変更行数: テスト以外1行、テスト1行",
-		"| 1-2 | 実装者 | 人が行うタスクです |",
+		"| `demo-1-1` (元: `main`) | テスト以外1行・テスト1行 |",
 		"<!-- item: task/1-1/1 -->",
 	} {
 		if !strings.Contains(out, want) {
@@ -118,7 +115,7 @@ func TestFlowReport(t *testing.T) {
 	out = fx.readReport(t, 2)
 	for _, want := range []string{
 		"- 前の版: 第1版",
-		"### fb1-1 [" + fx.repo + "] 直す\n\nこの版で進めたタスクです。",
+		"| fb1-1 [" + fx.repo + "] 直す (この版で進めたタスク) |",
 		"<!-- confirmed: task/1-1/1 -->",
 	} {
 		if !strings.Contains(out, want) {

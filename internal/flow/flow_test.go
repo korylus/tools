@@ -626,8 +626,8 @@ func TestFlowMissingPreviousBranch(t *testing.T) {
 
 		out := fx.readReport(t, 1)
 		for _, want := range []string{
-			"- 変更: ブランチ `demo-1-1` がローカルに残っていないため示せません\n",
-			"| `second.txt` | 1 | 0 |",
+			"| ブランチ `demo-1-1` がローカルに残っていないため示せません |",
+			"| `demo-1-3` (元: `main`) | テスト以外",
 			"| `" + fx.repo + "` | `demo-1-1` (ローカルに残っていません) | `main` | 1-1 |\n| `" + fx.repo + "` | `demo-1-3` | `main` | 1-3 |\n",
 		} {
 			if !strings.Contains(out, want) {
