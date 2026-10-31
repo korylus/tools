@@ -31,7 +31,7 @@ const usageText = `korylusflow - 作業計画書のタスクを役割ごとの�
 
 使い方:
   korylusflow wait <計画書> -role=<役割> [-timeout=<時間>]
-  korylusflow done <計画書> -role=<役割>
+  korylusflow done <計画書> -role=<役割> [-review-limit=<新しい上限>]
   korylusflow status <計画書>
   korylusflow report <計画書>
 
@@ -42,6 +42,7 @@ const usageText = `korylusflow - 作業計画書のタスクを役割ごとの�
   wait      役割の番が来るまで待ち、次の指示を標準出力に書く。-timeoutを過ぎたら action: wait を返す
   done      進めているステップの完了を記録し、次のステップを決める。実装のステップでは、動作確認の項目を
             標準入力からJSONの配列で受け取る (終了コード: 0 = 記録した、2 = 条件を満たさず受け付けなかった、1 = エラー)
+            上限に達して人を待っているタスクは、-review-limitで上限を延ばして再レビューを続けられる
   status    計画書の進行状況と、現在のタスク・ステップ・番の役割・人を待っている理由・所要時間を表示する
   report    作業報告書の最新の版を作り直す。最新の版のあとに記録したステップがあれば次の版を作る
             (通常は計画書の最後で自動で作る。書き込まれた動作確認の結果は引き継ぐ)

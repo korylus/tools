@@ -205,6 +205,19 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 // [implementer] のタスクでは、計画書のチェックを確かめ、inputは読まない。
 // 戻り値は、次のステップを伝える文面。
 func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (string, error) {
+	return f.done(ctx, role, input, 0)
+}
+
+// DoneWithReviewLimitは、レビュー上限に達して人を待っているタスクの上限を延ばし、確認の完了を記録する。
+// 上限の変更と次のステップへの遷移は同じロックの中で保存する。ほかのタスクの上限は変えない
+func (f *Flow) DoneWithReviewLimit(ctx context.Context, role state.Role, input io.Reader, limit int) (string, error) {
+	if limit <= 0 {
+		return "", reject("レビュー上限には正の回数を指定してください")
+	}
+	return f.done(ctx, role, input, limit)
+}
+
+func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit int) (string, error) {
 	unlock, err := f.Dir.LockContext(ctx)
 	if err != nil {
 		return "", err
@@ -250,6 +263,18 @@ func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (stri
 	rec := st.TaskRecord(st.Task)
 	if rec == nil && (st.Step == state.StepReview || st.Step == state.StepFix) {
 		return "", fmt.Errorf("タスク %s の記録がありません", st.Task)
+	}
+
+	if limit > 0 {
+		if st.Step != state.StepAsk || st.Ask == nil || st.Ask.Kind != state.AskReviewLimit || rec == nil {
+			return "", reject("レビュー上限は、上限に達して人を待っているタスクでだけ延長できます")
+		}
+		previous := reviewLimit(rec)
+		if limit <= previous || limit <= len(rec.Reviews) {
+			return "", reject("新しいレビュー上限には、現在の上限%d回と実施済み%d回を超える回数を指定してください", previous, len(rec.Reviews))
+		}
+		rec.ReviewLimit = limit
+		event.Reason += fmt.Sprintf(" (レビュー上限を%d回から%d回へ延長)", previous, limit)
 	}
 
 	// 各ステップの完了を確かめ、次のステップを決める。条件を満たさなければ、

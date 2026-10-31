@@ -14,8 +14,16 @@ import (
 	"github.com/korylus/tools/internal/review"
 )
 
-// maxReviewsは1タスクで行うレビューの上限の回数。
-const maxReviews = 3
+// defaultMaxReviewsは、延長していないタスクで行うレビューの上限の回数。
+const defaultMaxReviews = 3
+
+// reviewLimitは、このタスクについて人が延長した上限か、既定の上限を返す。
+func reviewLimit(rec *state.TaskRecord) int {
+	if rec.ReviewLimit > 0 {
+		return rec.ReviewLimit
+	}
+	return defaultMaxReviews
+}
 
 // reviewerForはn回目 (1始まり) のレビューを行う役割を返す。修正したモデルが同じ変更を
 // 再レビューしないよう、Codexから始めて交互に替える。
@@ -92,11 +100,12 @@ func (f *Flow) finishReview(ctx context.Context, st *state.State, rec *state.Tas
 	n := len(rec.Reviews) + 1
 	role := st.Role
 	rec.Reviews = append(rec.Reviews, state.ReviewRecord{Number: n, Role: role, Doc: doc, Verdict: string(d.Verdict), At: now})
-	if d.Verdict == review.RequestChanges && n >= maxReviews {
+	limit := reviewLimit(rec)
+	if d.Verdict == review.RequestChanges && n >= limit {
 		setStep(st, state.StepAsk, role, now)
 		st.Ask = &state.Ask{
 			Kind:   state.AskReviewLimit,
-			Reason: fmt.Sprintf("レビューが上限の%d回に達しても Request Changes でした", maxReviews),
+			Reason: fmt.Sprintf("レビューが上限の%d回に達しても Request Changes でした", limit),
 			Details: []string{
 				"レビュードキュメント: " + doc,
 				"続けると、回答と修正のあと、再レビューせずに次のタスクへ進みます",
@@ -187,7 +196,7 @@ func (f *Flow) answer(ctx context.Context, st *state.State, rec *state.TaskRecor
 // 決める。最後のレビューがRequest Changesで上限に達していなければ、別の役割で再レビューする。
 func (f *Flow) afterFix(ctx context.Context, st *state.State, rec *state.TaskRecord, now time.Time) error {
 	last := rec.Reviews[len(rec.Reviews)-1]
-	if review.Verdict(last.Verdict) == review.RequestChanges && last.Number < maxReviews {
+	if review.Verdict(last.Verdict) == review.RequestChanges && last.Number < reviewLimit(rec) {
 		return f.startReview(ctx, st, rec, now)
 	}
 	clearStep(st)

@@ -24,8 +24,9 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 	flags := flag.NewFlagSet("done", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	roleFlag := flags.String("role", "", "役割 (implementer / reviewer-codex / reviewer-claude)")
+	reviewLimitFlag := flags.Int("review-limit", 0, "上限に達したタスクの新しいレビュー上限 (例: 3回からあと3回続ける場合は6)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書> -role=<役割> [< 動作確認の項目のJSON]")
+		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書> -role=<役割> [-review-limit=<新しい上限>] [< 動作確認の項目のJSON]")
 		flags.PrintDefaults()
 	}
 	planPath, err := parsePlanArgs(flags, args)
@@ -43,7 +44,12 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError
 	}
-	msg, err := f.Done(ctx, role, stdin)
+	var msg string
+	if *reviewLimitFlag == 0 {
+		msg, err = f.Done(ctx, role, stdin)
+	} else {
+		msg, err = f.DoneWithReviewLimit(ctx, role, stdin, *reviewLimitFlag)
+	}
 	var rejected *flow.RejectedError
 	switch {
 	case errors.As(err, &rejected):

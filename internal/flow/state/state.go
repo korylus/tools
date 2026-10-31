@@ -138,7 +138,7 @@ const (
 	// 対応方針に回答があれば続ける。
 	AskReview AskKind = "review"
 	// AskReviewLimitは、レビューが上限の回数に達してもRequest Changesだったとき。
-	// 人が続けてよいと答えたら、回答と修正のあと再レビューせずに次のタスクへ進む。
+	// 上限を延長せずに続ける場合は、回答と修正のあと再レビューせずに次のタスクへ進む。
 	AskReviewLimit AskKind = "review_limit"
 )
 
@@ -170,6 +170,8 @@ type TaskRecord struct {
 	ReviewRepo   string `json:"review_repo,omitempty"`
 	// Reviewsは行ったレビューを、行った順に並べたもの。
 	Reviews []ReviewRecord `json:"reviews,omitempty"`
+	// ReviewLimitは人が延長したこのタスクのレビュー上限。0なら既定の3回を使う。
+	ReviewLimit int `json:"review_limit,omitempty"`
 	// Deferredは、コードを変えない選択肢 (後続タスクに積む・現状維持など) で回答した指摘。
 	Deferred []DeferredFinding `json:"deferred,omitempty"`
 	// Verificationは実装の完了で受け取った動作確認の項目。

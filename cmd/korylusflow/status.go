@@ -122,6 +122,9 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 		fmt.Fprintf(w, "ブランチ: %s (ベース: %s)\n", rec.Branch, rec.Base)
 		if n := len(rec.Reviews); n > 0 {
 			fmt.Fprintf(w, "レビュー: %d回 (最新の評価: %s)\n", n, rec.Reviews[n-1].Verdict)
+			if rec.ReviewLimit > 0 {
+				fmt.Fprintf(w, "レビューの上限: %d回\n", rec.ReviewLimit)
+			}
 		}
 	}
 	if st.Ask != nil {

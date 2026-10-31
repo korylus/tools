@@ -99,3 +99,20 @@ func TestDone(t *testing.T) {
 		}
 	})
 }
+
+func TestDoneReviewLimitFlag(t *testing.T) {
+	t.Parallel()
+	planPath := writeHumanPlan(t)
+	stateRoot := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := wait(context.Background(), []string{planPath, "-role=implementer"}, stateRoot, &stdout, &stderr); code != exitOK {
+		t.Fatal(stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code := done(context.Background(), []string{planPath, "-role=implementer", "-review-limit=6"}, stateRoot, strings.NewReader(""), &stdout, &stderr)
+	if code != exitRejected {
+		t.Fatalf("終了コード = %d、期待値 = %d (%s)", code, exitRejected, stderr.String())
+	}
+	assertContains(t, stderr.String(), "レビュー上限は、上限に達して人を待っているタスクでだけ")
+}

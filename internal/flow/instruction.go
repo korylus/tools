@@ -168,7 +168,7 @@ func (in Instruction) writeAsk(b *strings.Builder) {
 	case state.AskReview:
 		hint = "人がレビュードキュメントで、挙げた指摘の対応方針を選んだら続けられる"
 	case state.AskReviewLimit:
-		hint = "人がレビュードキュメントを確かめ、続けてよいと答えたら続けられる。後続のタスクに積む指摘は、人が対応方針を選び直してよい"
+		hint = "人がレビュードキュメントを確かめ、続けてよいと答えたら続けられる。さらにレビューを続ける指示があれば、doneに -review-limit=<新しい上限> を付ける。後続のタスクに積む指摘は、人が対応方針を選び直してよい"
 	}
 	steps := []string{
 		"上の理由と詳細を人に伝え、対応を頼んで返事を待つ。" + hint,
