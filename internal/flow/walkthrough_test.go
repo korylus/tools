@@ -84,6 +84,54 @@ func TestFlowWalkthroughSkipped(t *testing.T) {
 	}
 }
 
+func TestFlowWalkthroughAfterAddedTask(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t, "- [ ] **1-1**: [shimbaco] タグを付ける")
+	fx.wait(t, state.RoleImplementer)
+	fx.checkTask(t, "1-1")
+	if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+		t.Fatal(err)
+	}
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionWalkthrough {
+		t.Fatalf("指示 = %+v、処理の流れの指示を期待", in)
+	}
+
+	// 処理の流れを書いている間に人がタスクを足すと、書いた処理の流れでは作業報告書を作らない。
+	src, err := os.ReadFile(fx.flow.PlanPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src = append(src, []byte("- [ ] **1-2**: [shimbaco] 確かめる\n")...)
+	if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+		t.Fatal(err)
+	}
+	if _, err := fx.done(state.RoleImplementer, `{"skipped":"足す前の理由"}`); err != nil {
+		t.Fatal(err)
+	}
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionAsk || in.Task != "1-2" {
+		t.Fatalf("指示 = %+v、足したタスク1-2の人への確認を期待", in)
+	}
+	fx.checkTask(t, "1-2")
+	if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(fx.flow.Dir.ReportPath(1)); !os.IsNotExist(err) {
+		t.Fatalf("足したタスクのあとに、処理の流れを書き直す前の作業報告書を作った: %v", err)
+	}
+
+	// 足したタスクを終えたら、処理の流れを書き直してから作業報告書を作る。
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionWalkthrough {
+		t.Fatalf("指示 = %+v、処理の流れを書き直す指示を期待", in)
+	}
+	if _, err := fx.done(state.RoleImplementer, `{"skipped":"書き直した理由"}`); err != nil {
+		t.Fatal(err)
+	}
+	if out := fx.readReport(t, 1); !strings.Contains(out, "- 処理の流れ: 書いていません (書き直した理由)\n") {
+		t.Errorf("作業報告書に書き直した処理の流れが無い:\n%s", out)
+	}
+}
+
 func TestFlowReportWhilePendingWalkthrough(t *testing.T) {
 	t.Parallel()
 
