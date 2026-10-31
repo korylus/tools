@@ -110,7 +110,7 @@ func (f *Flow) writeReport(ctx context.Context, st *state.State, p *plan.Plan, e
 	var err error
 	now := f.Now()
 	in := report.Input{
-		PlanPath: f.PlanPath, Name: f.Name, Plan: p, Version: version, Now: now,
+		PlanURL: f.PlanURL, Name: f.Name, Plan: p, Version: version, Now: now,
 		State: st, Events: events, Changes: map[string]report.Changes{}, Walkthrough: w,
 	}
 	if version > 1 {

@@ -19,23 +19,23 @@ const timeLayout = "2006-01-02 15:04 -07:00"
 
 // runStatusはstatusサブコマンドのエントリポイント。
 func runStatus(args []string, stdout, stderr io.Writer) int {
-	return status(context.Background(), args, state.Root, time.Now(), stdout, stderr)
+	return status(context.Background(), args, state.Root, source.Parse, time.Now(), stdout, stderr)
 }
 
 // statusは計画書の進行状況と、stateRootの下の状態・所要時間を表示する。
 // nowは進めているステップの経過時間に使う。
-func status(ctx context.Context, args []string, stateRoot string, now time.Time, stdout, stderr io.Writer) int {
+func status(ctx context.Context, args []string, stateRoot string, parse parseSource, now time.Time, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "使い方: korylusflow status <計画書>")
 	}
-	planPath, err := parsePlanArgs(flags, args)
+	planURL, err := parsePlanArgs(flags, args)
 	if err != nil {
 		return parseFailed(flags, err)
 	}
 
-	src, err := source.Parse(planPath)
+	src, err := parse(planURL)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError
@@ -47,7 +47,7 @@ func status(ctx context.Context, args []string, stateRoot string, now time.Time,
 	}
 	p, err := plan.Parse(body)
 	if err != nil {
-		fmt.Fprintf(stderr, "エラー: %s を読み取れません:\n%v\n", planPath, err)
+		fmt.Fprintf(stderr, "エラー: %s を読み取れません:\n%v\n", planURL, err)
 		return exitError
 	}
 	name, err := src.Name(p)
@@ -67,7 +67,7 @@ func status(ctx context.Context, args []string, stateRoot string, now time.Time,
 		return exitError
 	}
 
-	fmt.Fprintf(stdout, "計画書: %s\n", planPath)
+	fmt.Fprintf(stdout, "計画書: %s\n", planURL)
 	fmt.Fprintf(stdout, "タスク: %d / %d 完了\n", p.DoneCount(), len(p.Tasks))
 	if next, ok := p.Next(); ok {
 		fmt.Fprintf(stdout, "次のタスク: %s\n", taskLabel(next))

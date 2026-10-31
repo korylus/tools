@@ -65,7 +65,7 @@ func TestFlowReviewRequestChanges(t *testing.T) {
 		t.Fatalf("指示 = %+v、1回目のレビューを期待", in)
 	}
 	text := in.String()
-	if want := fmt.Sprintf("`/korylus-review main %s`", fx.flow.PlanPath); !strings.Contains(text, want) {
+	if want := fmt.Sprintf("`/korylus-review main %s`", fx.flow.PlanURL); !strings.Contains(text, want) {
 		t.Errorf("指示に %q が無い:\n%s", want, text)
 	}
 	_, err := fx.done(state.RoleReviewerCodex, "")
@@ -423,7 +423,7 @@ func TestFlowReviewOtherRepository(t *testing.T) {
 	fx.implement(t, "1-1")
 
 	in := fx.wait(t, state.RoleReviewerCodex)
-	if want := fmt.Sprintf("`/korylus-review main %s repo=%s`", fx.flow.PlanPath, fx.repo); !strings.Contains(in.String(), want) {
+	if want := fmt.Sprintf("`/korylus-review main %s repo=%s`", fx.flow.PlanURL, fx.repo); !strings.Contains(in.String(), want) {
 		t.Errorf("指示に %q が無い:\n%s", want, in.String())
 	}
 	prefix := filepath.Base(fx.repo) + "-demo-1-1"

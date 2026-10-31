@@ -11,11 +11,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/korylus/tools/internal/flow"
+	"github.com/korylus/tools/internal/flow/source"
 )
 
 // 終了コード。doneが完了の記録を受け付けなかったときの2 (exitRejected) は、
@@ -35,7 +39,7 @@ const usageText = `korylusflow - 作業計画書のタスクを役割ごとの�
   korylusflow status <計画書>
   korylusflow report <計画書>
 
-計画書: プロジェクトのルートからの相対パスか、WikinoのページのURL (https://wikino.app/s/<スペース>/pages/<ページ番号>)
+計画書: WikinoのページのURL (https://wikino.app/s/<スペース>/pages/<ページ番号>)
 役割: implementer / reviewer-codex / reviewer-claude
 
 サブコマンド:
@@ -99,14 +103,14 @@ func parsePlanArgs(flags *flag.FlagSet, args []string) (string, error) {
 	if flags.NArg() == 0 {
 		return "", errUsage
 	}
-	path := flags.Arg(0)
+	planURL := flags.Arg(0)
 	if err := flags.Parse(flags.Args()[1:]); err != nil {
 		return "", err
 	}
 	if flags.NArg() != 0 {
 		return "", errUsage
 	}
-	return path, nil
+	return planURL, nil
 }
 
 // parseFailedは、parsePlanArgsのエラーを終了コードにする。-h/--helpの要求は
@@ -119,4 +123,17 @@ func parseFailed(flags *flag.FlagSet, err error) int {
 		flags.Usage()
 	}
 	return exitError
+}
+
+// parseSourceは、コマンドで受け取った計画書の指定から読み取り元を返す。
+// 本番ではsource.Parseを渡し、テストでは一時ファイルを読む実装に差し替える。
+type parseSource func(arg string) (source.Source, error)
+
+// openFlowは、計画書の指定argをparseで読み取り元にし、stateRootの下の状態で扱うFlowを返す。
+func openFlow(ctx context.Context, parse parseSource, arg, stateRoot string) (*flow.Flow, error) {
+	src, err := parse(arg)
+	if err != nil {
+		return nil, err
+	}
+	return flow.New(ctx, src, stateRoot)
 }

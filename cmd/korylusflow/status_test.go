@@ -9,11 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korylus/tools/internal/flow/source"
+	"github.com/korylus/tools/internal/flow/source/sourcetest"
 	"github.com/korylus/tools/internal/flow/state"
 	"github.com/korylus/tools/internal/plan"
 )
 
 const testPlan = `# 計画書
+
+**計画書名**: korylusflow
 
 ## タスクリスト
 
@@ -47,7 +51,7 @@ func TestStatusNotStarted(t *testing.T) {
 
 	planPath := writePlan(t)
 	var stdout, stderr bytes.Buffer
-	if code := status(context.Background(), []string{planPath}, t.TempDir(), time.Now(), &stdout, &stderr); code != exitOK {
+	if code := status(context.Background(), []string{planPath}, t.TempDir(), sourcetest.Parse, time.Now(), &stdout, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 	}
 	assertContains(t, stdout.String(),
@@ -76,7 +80,7 @@ func TestStatusPendingCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+	if code := status(context.Background(), []string{planPath}, stateRoot, sourcetest.Parse, now, &stdout, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 	}
 	assertContains(t, stdout.String(), "状態: タスク 2-1 の実装の完了を記録中 (waitかdoneで再開できます)")
@@ -118,7 +122,7 @@ func TestStatusWaitingForHuman(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+	if code := status(context.Background(), []string{planPath}, stateRoot, sourcetest.Parse, now, &stdout, &stderr); code != exitOK {
 		t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 	}
 	assertContains(t, stdout.String(),
@@ -166,22 +170,22 @@ func TestStatusErrors(t *testing.T) {
 			wantStderr: "を読み取れません",
 		},
 		{
-			name: "計画書名の行がファイル名と違うとエラー",
+			name: "計画書名の行が無いとエラー",
 			args: func(t *testing.T) []string {
 				path := filepath.Join(t.TempDir(), "korylusflow.md")
-				if err := os.WriteFile(path, []byte("**計画書名**: other\n\n"+strings.TrimPrefix(testPlan, "# 計画書\n\n")), 0o600); err != nil {
+				if err := os.WriteFile(path, []byte(strings.Replace(testPlan, "**計画書名**: korylusflow\n\n", "", 1)), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				return []string{path}
 			},
-			wantStderr: "計画書名 other がファイル名 korylusflow と違います",
+			wantStderr: "計画書名の行がありません",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var stdout, stderr bytes.Buffer
-			if code := status(context.Background(), tt.args(t), t.TempDir(), time.Now(), &stdout, &stderr); code != exitError {
+			if code := status(context.Background(), tt.args(t), t.TempDir(), sourcetest.Parse, time.Now(), &stdout, &stderr); code != exitError {
 				t.Errorf("終了コード = %d、期待値 = %d", code, exitError)
 			}
 			assertContains(t, stderr.String(), tt.wantStderr)
@@ -256,7 +260,7 @@ func TestStatusWalkthrough(t *testing.T) {
 				t.Fatal(err)
 			}
 			var stdout, stderr bytes.Buffer
-			if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+			if code := status(context.Background(), []string{planPath}, stateRoot, sourcetest.Parse, now, &stdout, &stderr); code != exitOK {
 				t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 			}
 			assertContains(t, stdout.String(), tt.want)
@@ -265,4 +269,14 @@ func TestStatusWalkthrough(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStatusRejectsPath(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	if code := status(context.Background(), []string{writePlan(t)}, t.TempDir(), source.Parse, time.Now(), &stdout, &stderr); code != exitError {
+		t.Errorf("終了コード = %d、期待値 = %d", code, exitError)
+	}
+	assertContains(t, stderr.String(), "https://wikino.app/s/<スペース>/pages/<ページ番号> の形のURLで指定してください")
 }

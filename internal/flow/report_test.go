@@ -79,7 +79,7 @@ func TestFlowReport(t *testing.T) {
 	for _, want := range []string{
 		"action: walkthrough\n",
 		"- " + fx.repo + ": `demo-1-1` (" + head + ")\n",
-		"`/korylus-write-walkthrough " + fx.flow.PlanPath + "`",
+		"`/korylus-write-walkthrough " + fx.flow.PlanURL + "`",
 		`{"skipped":"書かなかった理由"}`,
 	} {
 		if !strings.Contains(in.String(), want) {
@@ -136,12 +136,12 @@ func TestFlowReport(t *testing.T) {
 	}
 
 	// タスクを足して進めると、計画書の最後で第2版を作る。
-	src, err := os.ReadFile(fx.flow.PlanPath)
+	src, err := os.ReadFile(fx.planFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	src = append(src, []byte("- [ ] **fb1-1**: ["+fx.repo+"] 直す\n")...)
-	if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+	if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 		t.Fatal(err)
 	}
 	if in := fx.wait(t, state.RoleImplementer); in.Task != "fb1-1" || in.Record.Base != "demo-1-1" {
@@ -288,12 +288,12 @@ func TestFlowReportKeepsMarkdownComments(t *testing.T) {
 		t.Errorf("同じ版を作り直したときに結果を失った:\n%s", out)
 	}
 
-	src, err := os.ReadFile(fx.flow.PlanPath)
+	src, err := os.ReadFile(fx.planFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	src = append(src, []byte("- [ ] **fb1-1**: [shimbaco] 確認する\n")...)
-	if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+	if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 		t.Fatal(err)
 	}
 	fx.wait(t, state.RoleImplementer)

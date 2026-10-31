@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/korylus/tools/internal/flow"
+	"github.com/korylus/tools/internal/flow/source"
 	"github.com/korylus/tools/internal/flow/state"
 )
 
@@ -18,11 +18,11 @@ import (
 func runWait(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return wait(ctx, args, state.Root, stdout, stderr)
+	return wait(ctx, args, state.Root, source.Parse, stdout, stderr)
 }
 
 // waitは役割の番が来るまで待ち、次の指示を標準出力に書く。
-func wait(ctx context.Context, args []string, stateRoot string, stdout, stderr io.Writer) int {
+func wait(ctx context.Context, args []string, stateRoot string, parse parseSource, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("wait", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	roleFlag := flags.String("role", "", "役割 (implementer / reviewer-codex / reviewer-claude)")
@@ -31,7 +31,7 @@ func wait(ctx context.Context, args []string, stateRoot string, stdout, stderr i
 		fmt.Fprintln(stderr, "使い方: korylusflow wait <計画書> -role=<役割> [-timeout=<時間>]")
 		flags.PrintDefaults()
 	}
-	planPath, err := parsePlanArgs(flags, args)
+	planURL, err := parsePlanArgs(flags, args)
 	if err != nil {
 		return parseFailed(flags, err)
 	}
@@ -41,7 +41,7 @@ func wait(ctx context.Context, args []string, stateRoot string, stdout, stderr i
 		return exitError
 	}
 
-	f, err := flow.New(ctx, planPath, stateRoot)
+	f, err := openFlow(ctx, parse, planURL, stateRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError

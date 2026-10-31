@@ -96,11 +96,11 @@ func TestFlowWaitWithoutReadingPlan(t *testing.T) {
 	fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
 	fx.wait(t, state.RoleImplementer)
 	// 計画書を読めなくして、読みに行けばエラーになるようにする。
-	src, err := os.ReadFile(fx.flow.PlanPath)
+	src, err := os.ReadFile(fx.planFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(fx.flow.PlanPath); err != nil {
+	if err := os.Remove(fx.planFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +117,7 @@ func TestFlowWaitWithoutReadingPlan(t *testing.T) {
 		t.Errorf("実装者のWaitのエラー = %v、期待値 = 計画書を読めないエラー", err)
 	}
 
-	if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+	if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 		t.Fatal(err)
 	}
 	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionImplement || in.Task != "1-1" || in.Title != "タスク" {

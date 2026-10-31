@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/korylus/tools/internal/flow/source"
+	"github.com/korylus/tools/internal/flow/source/sourcetest"
 	"github.com/korylus/tools/internal/flow/state"
 )
 
@@ -50,7 +51,9 @@ func commit(t *testing.T, repo, name string) {
 // fixtureはテストの環境。mainにコミットを1つ持つリポジトリと、計画書・状態ディレクトリを持つ。
 type fixture struct {
 	repo string
-	flow *Flow
+	// planFileは計画書のファイルのパス。テスト用の読み取り元がこのファイルを読む。
+	planFile string
+	flow     *Flow
 }
 
 // newFixtureは、tasksを「## タスクリスト」節に並べた計画書demo.mdで環境を作る。
@@ -65,11 +68,11 @@ func newFixture(t *testing.T, tasks ...string) fixture {
 	commit(t, repo, "README.md")
 
 	planPath := filepath.Join(t.TempDir(), "demo.md")
-	src := "# 計画書\n\n## タスクリスト\n\n" + strings.ReplaceAll(strings.Join(tasks, "\n"), "{repo}", repo) + "\n"
+	src := "# 計画書\n\n**計画書名**: demo\n\n## タスクリスト\n\n" + strings.ReplaceAll(strings.Join(tasks, "\n"), "{repo}", repo) + "\n"
 	if err := os.WriteFile(planPath, []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fx := fixture{repo: repo, flow: &Flow{PlanPath: planPath, Dir: state.NewDir(t.TempDir(), "demo")}}
+	fx := fixture{repo: repo, planFile: planPath, flow: &Flow{Dir: state.NewDir(t.TempDir(), "demo")}}
 	fx.reopen(t)
 	return fx
 }
@@ -78,7 +81,7 @@ func newFixture(t *testing.T, tasks ...string) fixture {
 // プロジェクトのルート (本体) として扱い、レビュードキュメントもその下に置く。
 func (fx *fixture) reopen(t *testing.T) {
 	t.Helper()
-	f, err := New(context.Background(), fx.flow.PlanPath, filepath.Dir(fx.flow.Dir.Path()))
+	f, err := New(context.Background(), sourcetest.File{Path: fx.planFile}, filepath.Dir(fx.flow.Dir.Path()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,12 +137,12 @@ func (fx fixture) skipWalkthrough(t *testing.T) string {
 // checkTaskは計画書のタスクidにチェックを付ける。
 func (fx fixture) checkTask(t *testing.T, id string) {
 	t.Helper()
-	b, err := os.ReadFile(fx.flow.PlanPath)
+	b, err := os.ReadFile(fx.planFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := strings.Replace(string(b), fmt.Sprintf("- [ ] **%s**", id), fmt.Sprintf("- [x] **%s**", id), 1)
-	if err := os.WriteFile(fx.flow.PlanPath, []byte(src), 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+	if err := os.WriteFile(fx.planFile, []byte(src), 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 		t.Fatal(err)
 	}
 }
@@ -203,9 +206,9 @@ func TestFlowTasks(t *testing.T) {
 	text := in.String()
 	for _, want := range []string{
 		"action: implement\n",
-		fmt.Sprintf("/korylus-do-plan-task %s 1-1 repo=%s base=main", fx.flow.PlanPath, fx.repo),
+		fmt.Sprintf("/korylus-do-plan-task %s 1-1 repo=%s base=main", fx.flow.PlanURL, fx.repo),
 		fmt.Sprintf("/korylus-commit repo=%s", fx.repo),
-		fmt.Sprintf("korylusflow done %s -role=implementer", fx.flow.PlanPath),
+		fmt.Sprintf("korylusflow done %s -role=implementer", fx.flow.PlanURL),
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("指示に %q が無い:\n%s", want, text)
@@ -381,12 +384,12 @@ func TestFlowBranchAsk(t *testing.T) {
 		if in := fx.wait(t, state.RoleImplementer); in.Action != ActionAsk || in.Ask.Kind != state.AskBranch {
 			t.Fatalf("指示 = %+v、ブランチの準備のaskを期待", in)
 		}
-		src, err := os.ReadFile(fx.flow.PlanPath)
+		src, err := os.ReadFile(fx.planFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		src = []byte(strings.Replace(string(src), "["+fx.repo+"]", "[shimbaco]", 1))
-		if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+		if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 			t.Fatal(err)
 		}
 		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
@@ -501,9 +504,7 @@ func TestNewName(t *testing.T) {
 	tests := []struct {
 		name, head, wantName, wantErr string
 	}{
-		{name: "行が無ければファイル名を使う", wantName: "demo"},
-		{name: "行がファイル名と同じなら使う", head: "**計画書名**: demo\n\n", wantName: "demo"},
-		{name: "行がファイル名と違えばエラー", head: "**計画書名**: other\n\n", wantErr: "計画書名 other がファイル名 demo と違います"},
+		{name: "計画書名の行の値を状態の置き場に使う", head: "**計画書名**: other-plan\n\n", wantName: "other-plan"},
 		{name: "計画書を読み取れなければエラー", head: "**計画書名**: Demo\n\n", wantErr: "を読み取れません"},
 	}
 	for _, tt := range tests {
@@ -512,7 +513,7 @@ func TestNewName(t *testing.T) {
 			planPath := filepath.Join(t.TempDir(), "demo.md")
 			writeFile(t, filepath.Dir(planPath), "demo.md", tt.head+"## タスクリスト\n\n- [ ] **1-1**: [shimbaco] 人のタスク\n")
 			stateRoot := t.TempDir()
-			f, err := New(context.Background(), planPath, stateRoot)
+			f, err := New(context.Background(), sourcetest.File{Path: planPath}, stateRoot)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("Newのエラー = %v、期待値 = %q を含むエラー", err, tt.wantErr)
@@ -548,9 +549,9 @@ func TestFlowWikinoPlan(t *testing.T) {
 		return []byte("---\nwikino_number: 12\n---\n\n" + body), nil, 0, nil
 	}}
 	stateRoot := t.TempDir()
-	f, err := open(context.Background(), src, stateRoot)
+	f, err := New(context.Background(), src, stateRoot)
 	if err != nil {
-		t.Fatalf("openのエラー = %v", err)
+		t.Fatalf("Newのエラー = %v", err)
 	}
 	f.Root, f.PollInterval = repo, 10*time.Millisecond
 	if f.Name != "wiki-demo" || f.Dir.Path() != filepath.Join(stateRoot, "wiki-demo") {
@@ -590,8 +591,8 @@ func TestNewWikinoWithoutName(t *testing.T) {
 	src := &source.Wikino{URL: "https://wikino.app/s/shimbaco/pages/12", Space: "shimbaco", Number: 12, Run: func(context.Context, ...string) ([]byte, []byte, int, error) {
 		return []byte("## タスクリスト\n\n- [ ] **1-1**: [shimbaco] 人のタスク\n"), nil, 0, nil
 	}}
-	if _, err := open(context.Background(), src, t.TempDir()); err == nil || !strings.Contains(err.Error(), "計画書名の行がありません") {
-		t.Errorf("openのエラー = %v、期待値 = 計画書名の行が無いエラー", err)
+	if _, err := New(context.Background(), src, t.TempDir()); err == nil || !strings.Contains(err.Error(), "計画書名の行がありません") {
+		t.Errorf("Newのエラー = %v、期待値 = 計画書名の行が無いエラー", err)
 	}
 }
 
@@ -736,12 +737,12 @@ func TestFlowAssignee(t *testing.T) {
 		_, err := fx.done(state.RoleImplementer, "")
 		assertRejected(t, err, "まだブランチを準備できません", "接頭辞 [implementer] がパスではありません")
 
-		src, err := os.ReadFile(fx.flow.PlanPath)
+		src, err := os.ReadFile(fx.planFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		src = []byte(strings.Replace(string(src), "[implementer] ", "", 1))
-		if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+		if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 			t.Fatal(err)
 		}
 		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
@@ -773,7 +774,7 @@ func TestFlowImplementerTask(t *testing.T) {
 		"行う前に対象の一覧を人に示し、その場で了承を得る",
 		"チェックは自分で付けない",
 		"人が差分を確かめてコミットするよう伝える",
-		fmt.Sprintf("korylusflow done %s -role=implementer", fx.flow.PlanPath),
+		fmt.Sprintf("korylusflow done %s -role=implementer", fx.flow.PlanURL),
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("指示に %q が無い:\n%s", want, text)

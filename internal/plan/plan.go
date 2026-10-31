@@ -9,7 +9,6 @@ package plan
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -120,18 +119,6 @@ func (t Task) FeedbackRound() (int, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-// FileNameは、パスpathのファイルの計画書pの計画書名を返す。計画書名は状態ディレクトリ・
-// ブランチ名・作業報告書の見出しに使う。計画書名の行が無ければ、拡張子を除いたファイル名を使う。
-// 行があるときはファイル名と同じでなければエラーにする。作業報告書のディレクトリ名
-// (計画書名) から、同じファイル名の計画書を探せるようにするためである。
-func FileName(path string, p *Plan) (string, error) {
-	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	if p.Name != "" && p.Name != base {
-		return "", fmt.Errorf("計画書名 %s がファイル名 %s と違います。計画書名の行かファイル名を直して揃えてください", p.Name, base)
-	}
-	return base, nil
 }
 
 // Nextは最初の未完了のタスクを返す。すべて完了していればfalseを返す。
