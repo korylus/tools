@@ -11,6 +11,7 @@ import (
 	"github.com/korylus/tools/internal/flow/branch"
 	"github.com/korylus/tools/internal/flow/report"
 	"github.com/korylus/tools/internal/flow/state"
+	"github.com/korylus/tools/internal/plan"
 )
 
 // Reportは作業報告書の最新の版を作り直し、そのパスを返す。最新の版のあとに記録した
@@ -47,11 +48,11 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 	if hasNewEvents(st, events) {
 		v++
 	}
-	doc, err := f.readPlan(ctx)
+	p, err := f.readPlan(ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := f.writeReport(ctx, st, doc, events, v); err != nil {
+	if err := f.writeReport(ctx, st, p, events, v); err != nil {
 		return "", err
 	}
 	if err := f.Dir.Save(st, f.Now()); err != nil {
@@ -60,9 +61,9 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 	return f.Dir.ReportPath(v), nil
 }
 
-// finishPlanは、計画書docの最後まで進んだ状態stで、最新の版のあとに記録したステップが
+// finishPlanは、計画書pの最後まで進んだ状態stで、最新の版のあとに記録したステップが
 // あれば作業報告書の次の版を作る。計画書の最後でwaitを何度呼ばれても版を増やさない。
-func (f *Flow) finishPlan(ctx context.Context, st *state.State, doc *planDoc) error {
+func (f *Flow) finishPlan(ctx context.Context, st *state.State, p *plan.Plan) error {
 	events, err := f.Dir.ReadEvents()
 	if err != nil {
 		return err
@@ -70,7 +71,7 @@ func (f *Flow) finishPlan(ctx context.Context, st *state.State, doc *planDoc) er
 	if !hasNewEvents(st, events) {
 		return nil
 	}
-	return f.writeReport(ctx, st, doc, events, len(st.Reports)+1)
+	return f.writeReport(ctx, st, p, events, len(st.Reports)+1)
 }
 
 // hasNewEventsは、最新の版の作業報告書のあとに記録したステップがあるかを返す。
@@ -82,14 +83,14 @@ func hasNewEvents(st *state.State, events []state.Event) bool {
 	return len(events) > covered
 }
 
-// writeReportは計画書docの作業報告書の版versionを組み立てて書き、状態stに記録する。
+// writeReportは計画書pの作業報告書の版versionを組み立てて書き、状態stに記録する。
 // 既にある版を作り直すときは、その版に人が書き込んだ結果を引き継ぐ。書き込みが
 // 区切りを隠していて、生成した節がコメントに取り込まれていれば作り直さない。
-func (f *Flow) writeReport(ctx context.Context, st *state.State, doc *planDoc, events []state.Event, version int) error {
+func (f *Flow) writeReport(ctx context.Context, st *state.State, p *plan.Plan, events []state.Event, version int) error {
 	var err error
 	now := f.Now()
 	in := report.Input{
-		PlanPath: f.PlanPath, Name: f.Name, Plan: doc.Plan, Version: version, Now: now,
+		PlanPath: f.PlanPath, Name: f.Name, Plan: p, Version: version, Now: now,
 		State: st, Events: events, Changes: map[string]report.Changes{},
 	}
 	if version > 1 {
