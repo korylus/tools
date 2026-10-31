@@ -131,15 +131,14 @@ func TestFlowResumeAfterEventFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx.reopen(t)
-	if in := fx.wait(t, state.RoleReviewerClaude); in.Action != ActionFinish {
-		t.Fatalf("再開後の指示 = %+v、終了を期待", in)
-	}
+	// 実装者のwaitが記録の途中から再開し、計画書の最後の処理の流れのステップに進む。
+	fx.skipWalkthrough(t)
 	events, err := fx.flow.Dir.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[1].Task != "1-1" || events[1].Step != state.StepReview {
-		t.Errorf("履歴 = %+v、タスク1-1の実装とレビューの記録を期待", events)
+	if len(events) != 3 || events[1].Task != "1-1" || events[1].Step != state.StepReview || events[2].Task != "" || events[2].Step != state.StepWalkthrough {
+		t.Errorf("履歴 = %+v、タスク1-1の実装とレビューと、処理の流れの記録を期待", events)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

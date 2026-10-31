@@ -48,23 +48,60 @@ func TestFlowReport(t *testing.T) {
 		t.Errorf("途中のReport()のエラー = %v", err)
 	}
 
-	// 計画書の最後で、第1版を作る。
+	// 計画書の最後で、作業報告書を作る前に実装者が処理の流れを書く。
 	fx.checkTask(t, "1-2")
-	first := fx.flow.Dir.ReportPath(1)
 	msg, err := fx.done(state.RoleImplementer, "")
 	if err != nil {
 		t.Fatalf("人への確認のDoneのエラー = %v", err)
 	}
+	if !strings.Contains(msg, "次は処理の流れの作成で、implementer の番です") {
+		t.Errorf("Done() = %q", msg)
+	}
+	first := fx.flow.Dir.ReportPath(1)
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Errorf("処理の流れを書く前に作業報告書を作った: %v", err)
+	}
+	if _, err := fx.flow.Report(ctx); err == nil || !strings.Contains(err.Error(), "処理の流れを書いている途中です") {
+		t.Errorf("処理の流れのステップのReport()のエラー = %v", err)
+	}
+	if in, err := fx.flow.Wait(ctx, state.RoleReviewerCodex, 50*time.Millisecond); err != nil || in.Action != ActionWait {
+		t.Errorf("レビュアーの指示 = %+v, %v、処理の流れのステップでは待つことを期待", in, err)
+	}
+	_, err = fx.done(state.RoleReviewerCodex, "")
+	assertRejected(t, err, "reviewer-codex の番ではありません (処理の流れの作成は implementer の番です)")
+
+	in := fx.wait(t, state.RoleImplementer)
+	head := strings.TrimSpace(gitRun(t, fx.repo, "rev-parse", "demo-1-1"))
+	if in.Action != ActionWalkthrough || in.Task != "" || in.PreviousWalkthrough != "" ||
+		len(in.Branches) != 1 || in.Branches[0] != (WalkthroughBranch{Repo: fx.repo, Branch: "demo-1-1", Commit: head}) {
+		t.Fatalf("指示 = %+v、demo-1-1 (%s) の処理の流れの指示を期待", in, head)
+	}
+	for _, want := range []string{
+		"action: walkthrough\n",
+		"- " + fx.repo + ": `demo-1-1` (" + head + ")\n",
+		"`/korylus-write-walkthrough " + fx.flow.PlanPath + "`",
+		`{"skipped":"書かなかった理由"}`,
+	} {
+		if !strings.Contains(in.String(), want) {
+			t.Errorf("指示に %q が無い:\n%s", want, in.String())
+		}
+	}
+	walkthrough := "docs/private/plans/files/demo/walkthrough.md"
+	_, err = fx.done(state.RoleImplementer, `{"location":"`+walkthrough+`"}`)
+	assertRejected(t, err, "処理の流れのファイル "+walkthrough+" がありません")
+	writeFile(t, fx.flow.Root, walkthrough, "# 処理の流れ\n")
+	if msg, err = fx.done(state.RoleImplementer, `{"location":"`+walkthrough+`"}`); err != nil {
+		t.Fatalf("処理の流れのDoneのエラー = %v", err)
+	}
 	if !strings.Contains(msg, "作業報告書: "+first) {
 		t.Errorf("Done() = %q", msg)
 	}
+
 	out := fx.readReport(t, 1)
 	for _, want := range []string{
 		"| `" + fx.repo + "` | `demo-1-1` | `main` | 1-1 |",
-		"` feature_test.go\n",
-		"| `feature.go` | 1 | 0 |",
-		"- 変更行数: テスト以外1行、テスト1行",
-		"| 1-2 | 実装者 | 人が行うタスクです |",
+		"| `demo-1-1` (元: `main`) | テスト以外1行・テスト1行 |",
+		"- 処理の流れ: `" + walkthrough + "`\n",
 		"<!-- item: task/1-1/1 -->",
 	} {
 		if !strings.Contains(out, want) {
@@ -91,6 +128,9 @@ func TestFlowReport(t *testing.T) {
 	if path, err := fx.flow.Report(ctx); err != nil || path != first {
 		t.Fatalf("Report() = %q, %v、期待値 = %q", path, err, first)
 	}
+	if out := fx.readReport(t, 1); !strings.Contains(out, "- 処理の流れ: `"+walkthrough+"`\n") {
+		t.Errorf("作り直した第1版で、処理の流れの場所が消えた:\n%s", out)
+	}
 	if out := fx.readReport(t, 1); !strings.Contains(out, "- [x] OK") {
 		t.Errorf("作り直した第1版で、書き込まれた結果が消えた:\n%s", out)
 	}
@@ -112,13 +152,23 @@ func TestFlowReport(t *testing.T) {
 	if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
 		t.Fatalf("実装のDoneのエラー = %v", err)
 	}
-	if msg := fx.approve(t, "fb1-1"); !strings.Contains(msg, fx.flow.Dir.ReportPath(2)) {
+	if msg := fx.approve(t, "fb1-1"); !strings.Contains(msg, "次は処理の流れの作成") {
 		t.Errorf("Done() = %q", msg)
 	}
+	// 2回目の版では、前の版で書いた処理の流れを更新してもらう。
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionWalkthrough || in.PreviousWalkthrough != walkthrough ||
+		len(in.Branches) != 1 || in.Branches[0].Branch != "demo-fb1-1" {
+		t.Fatalf("指示 = %+v、demo-fb1-1で前の版の処理の流れを更新する指示を期待", in)
+	}
+	if msg, err := fx.done(state.RoleImplementer, `{"location":"https://wikino.app/s/demo/pages/1"}`); err != nil || !strings.Contains(msg, fx.flow.Dir.ReportPath(2)) {
+		t.Errorf("処理の流れのDone() = %q, %v", msg, err)
+	}
+
 	out = fx.readReport(t, 2)
 	for _, want := range []string{
 		"- 前の版: 第1版",
-		"### fb1-1 [" + fx.repo + "] 直す\n\nこの版で進めたタスクです。",
+		"- 処理の流れ: https://wikino.app/s/demo/pages/1\n",
+		"| fb1-1 [" + fx.repo + "] 直す (この版で進めたタスク) |",
 		"<!-- confirmed: task/1-1/1 -->",
 	} {
 		if !strings.Contains(out, want) {
@@ -129,8 +179,10 @@ func TestFlowReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Reports) != 2 || st.Reports[1].Version != 2 {
-		t.Errorf("作業報告書の記録 = %+v", st.Reports)
+	if len(st.Reports) != 2 || st.Reports[1].Version != 2 || st.Walkthrough != nil ||
+		st.Reports[0].Walkthrough == nil || st.Reports[0].Walkthrough.Location != walkthrough ||
+		st.Reports[1].Walkthrough == nil || st.Reports[1].Walkthrough.Location != "https://wikino.app/s/demo/pages/1" {
+		t.Errorf("作業報告書の記録 = %+v、未記録の処理の流れ = %+v", st.Reports, st.Walkthrough)
 	}
 }
 
@@ -191,6 +243,7 @@ func TestFlowReportRefusesAbsorbedSections(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx.approve(t, "1-1")
+	fx.skipWalkthrough(t)
 
 	// コメントのフェンスを閉じ忘れると、全体へのコメントの節がコードブロックに入る。
 	first := fx.flow.Dir.ReportPath(1)
@@ -218,6 +271,7 @@ func TestFlowReportKeepsMarkdownComments(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx.approve(t, "1-1")
+	fx.skipWalkthrough(t)
 
 	comment := "再現手順\n\n### 詳細\n\n```markdown\n# エラー\n```\n\n一覧が出ない"
 	first := fx.flow.Dir.ReportPath(1)
@@ -247,6 +301,7 @@ func TestFlowReportKeepsMarkdownComments(t *testing.T) {
 	if _, err := fx.done(state.RoleImplementer, ""); err != nil {
 		t.Fatal(err)
 	}
+	fx.skipWalkthrough(t)
 	quoted := "> " + strings.ReplaceAll(comment, "\n", "\n> ")
 	if out := fx.readReport(t, 2); strings.Count(out, quoted) != 2 || !strings.Contains(out, "第1版 #1 NG") {
 		t.Errorf("次の版を作ったときに前版の結果を失った:\n%s", out)

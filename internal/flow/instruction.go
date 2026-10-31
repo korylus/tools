@@ -18,7 +18,9 @@ const (
 	ActionReview Action = "review"
 	ActionFix    Action = "fix"
 	ActionAsk    Action = "ask"
-	ActionFinish Action = "finish"
+	// ActionWalkthroughは、計画書の最後に作業報告書を作る前に、処理の流れを書く指示。
+	ActionWalkthrough Action = "walkthrough"
+	ActionFinish      Action = "finish"
 	// ActionWaitは、waitの-timeoutを過ぎても番が来なかったときの指示。
 	ActionWait Action = "wait"
 )
@@ -45,6 +47,10 @@ type Instruction struct {
 	ReviewDoc    string
 	// Reportは、終了の指示で、計画書の最後で作った作業報告書のパス。
 	Report string
+	// Branchesは、処理の流れの指示で、リポジトリごとの最後のタスクのブランチ。
+	Branches []WalkthroughBranch
+	// PreviousWalkthroughは、処理の流れの指示で、前の版までに書いた処理の流れの場所。無ければ空文字。
+	PreviousWalkthrough string
 }
 
 // Stringは指示を、役割のセッションが読む文面にする。コンテキストが圧縮されたあとでも
@@ -81,6 +87,8 @@ func (in Instruction) String() string {
 		in.writeFix(&b)
 	case ActionAsk:
 		in.writeAsk(&b)
+	case ActionWalkthrough:
+		in.writeWalkthrough(&b)
 	case ActionFinish:
 		if in.Report != "" {
 			fmt.Fprintf(&b, "計画書の最後まで進んだ。作業報告書 %s を作ったことを人に伝え、ループを終える。\n", code(in.Report))
@@ -174,6 +182,37 @@ func (in Instruction) writeAsk(b *strings.Builder) {
 		"上の理由と詳細を人に伝え、対応を頼んで返事を待つ。" + hint,
 		fmt.Sprintf("人が対応を済ませたと答えたら、%s を実行する", code(in.doneCommand())),
 		"done が受け付けられなかったら、理由を人に伝えて1に戻る",
+		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
+	}
+	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")
+	writeSteps(b, steps)
+}
+
+func (in Instruction) writeWalkthrough(b *strings.Builder) {
+	b.WriteString("リポジトリごとの最後のタスクのブランチ:\n")
+	if len(in.Branches) == 0 {
+		b.WriteString("- なし (ブランチを作ったタスクがありません)\n")
+	}
+	for _, br := range in.Branches {
+		commit := br.Commit
+		if commit == "" {
+			commit = "ローカルに残っていません"
+		}
+		fmt.Fprintf(b, "- %s: %s (%s)\n", br.Repo, code(br.Branch), commit)
+	}
+	if in.PreviousWalkthrough != "" {
+		fmt.Fprintf(b, "前の版の処理の流れ: %s\n", in.PreviousWalkthrough)
+	}
+	b.WriteString("\n")
+
+	write := fmt.Sprintf("%s を実行し、計画書で実装したものの処理の流れを書く", code("/korylus-write-walkthrough "+in.PlanPath))
+	if in.PreviousWalkthrough != "" {
+		write += "。前の版の処理の流れを、新しく作らずに上のブランチのコードに合わせて更新する"
+	}
+	steps := []string{
+		write + "。ブランチは切り替えない",
+		fmt.Sprintf("%s を、処理の流れの場所か書かなかった理由のJSONを標準入力に渡して実行する\n   形: %s", code(in.doneCommand()), walkthroughExample),
+		"done が受け付けられなかったら、理由を読んで直してから2をやり直す。直せなければ人に尋ねる",
 		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
 	}
 	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")

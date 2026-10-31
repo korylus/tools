@@ -1,9 +1,13 @@
 package report
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 
 	"github.com/korylus/tools/internal/flow/branch"
 	"github.com/korylus/tools/internal/flow/state"
@@ -53,7 +57,7 @@ func newInput(t *testing.T, src string) Input {
 		},
 	}}}
 	return Input{
-		PlanPath: "docs/private/plans/1_doing/demo.md", Name: "demo", PlanSrc: src, Plan: p, Version: 1, Now: at(120), State: st,
+		PlanPath: "docs/private/plans/1_doing/demo.md", Name: "demo", Plan: p, Version: 1, Now: at(120), State: st,
 		Events: []state.Event{
 			{Task: "1-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(0), Ended: at(30)},
 			{Task: "1-1", Step: state.StepReview, Role: state.RoleReviewerCodex, Started: at(30), Ended: at(50)},
@@ -61,7 +65,6 @@ func newInput(t *testing.T, src string) Input {
 			{Task: "1-2", Step: state.StepAsk, Role: state.RoleImplementer, Started: at(60), Ended: at(105), Reason: "人が行うタスクです"},
 		},
 		Changes: map[string]Changes{"1-1": {
-			Commits: []branch.Commit{{Hash: "abc1234", Subject: "状態を作る"}},
 			Files: []branch.FileChange{
 				{Path: "go/internal/state.go", Added: 50, Removed: 5},
 				{Path: "go/internal/state_test.go", Added: 30},
@@ -107,19 +110,9 @@ func TestBuild(t *testing.T) {
 		"- 計画書の開始: 2026-10-22 09:00 +00:00\n",
 		"### マージするPR\n\nリポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n",
 		"| `/repo` | `demo-1-1` | `develop` | 1-1 |\n",
-		"### 1-1 [/repo/go] 状態を作る\n",
-		"- 変更行数: テスト以外55行、テスト30行 (追加と削除の合計)\n",
-		"- 想定行数: 約100行 (実装60行 + テスト40行)\n",
-		"- `abc1234` 状態を作る\n",
-		"| `go/testdata/a.png` | - | - |\n",
-		"| 1 | レビュアー (Codex) | Comment | `docs/private/reviews/demo-1-1-001.md` |\n",
-		"- 状態をどこに置くか?\n",
+		"## タスクごとの変更\n\n変更行数は、元のブランチからタスクのブランチまでの追加と削除の合計です。\n\n",
+		"| 1-1 [/repo/go] 状態を作る | `demo-1-1` (元: `develop`) | テスト以外55行・テスト30行 | 約100行 (実装60行 + テスト40行) | Comment |\n",
 		`| 1-1 | 名前\|を改める | 後続タスクに積む (推奨) |`,
-		"| 1-2 | 実装者 | 人が行うタスクです | 2026-10-22 10:00 +00:00 | 45分 |\n",
-		"- この版の合計: 1時間45分\n",
-		"| レビュアー (Codex) | 修正 | 1 | 10分 | 10分 |\n",
-		"| 1-1 | 30分 | 20分 | 10分 | 0分 | 1時間0分 |\n",
-		"| 1-2 | 0分 | 0分 | 0分 | 45分 | 45分 |\n",
 		"- 宣言: モジュール間の依存関係 (flowからplanへの依存)\n",
 		"- 差分を見るコマンド: `git -C /repo diff develop...demo-1-1`\n",
 		"### #1 statusを表示できる\n\n<!-- item: task/1-1/1 -->\n",
@@ -132,7 +125,7 @@ func TestBuild(t *testing.T) {
 		"コードを変更しない方針を選んだ指摘です。\n",
 		"## 全体へのコメント\n",
 	)
-	for _, unwanted := range []string{"1-3", "この版で進めた", "前の版"} {
+	for _, unwanted := range []string{"1-3", "この版で進めた", "前の版", "## 人を待った履歴", "## 所要時間", "状態をどこに置くか?", "a.png", "コミット:"} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("作業報告書に %q がある:\n%s", unwanted, out)
 		}
@@ -161,10 +154,9 @@ func TestBuildNextVersion(t *testing.T) {
 	out := string(Build(in))
 	assertContains(t, out,
 		"- この版の期間: 2026-10-22 12:20 +00:00 〜 2026-10-22 14:00 +00:00\n",
-		"- 前の版: 第1版\n\n前の版の全体へのコメント:\n\n> フォントが小さい\n",
-		"### fb1-1 [/repo/go] 一覧を直す\n\nこの版で進めたタスクです。\n",
+		"- 前の版: 第1版\n- 処理の流れ: 記録なし\n\n前の版の全体へのコメント:\n\n> フォントが小さい\n",
+		"| fb1-1 [/repo/go] 一覧を直す (この版で進めたタスク) | `demo-fb1-1` (元: `demo-1-1`) | テスト以外0行・テスト0行 | 記載なし | なし |\n",
 		"| `/repo` | `demo-fb1-1` | `develop` | 1-1・fb1-1 |\n",
-		"- この版の合計: 30分\n- 版をまたいだ合計: 2時間15分\n",
 		"### #1 statusを表示できる\n\n<!-- item: task/1-1/1 -->\n",
 		"- 前の版の結果: 第1版 #1 NG\n- 対応したフィードバックのタスク: fb1-1\n\n前の版のコメント:\n\n> 一覧が空だった\n",
 		"### #2 一覧が出る\n",
@@ -173,7 +165,7 @@ func TestBuildNextVersion(t *testing.T) {
 		"### 確認済みの項目\n",
 		"- #4 画面を開ける (対象タスク: 1-1) <!-- confirmed: task/1-1/2 -->\n",
 	)
-	if strings.Contains(out, "### 1-1 [/repo/go] 状態を作る\n\nこの版で") {
+	if strings.Contains(out, "| 1-1 [/repo/go] 状態を作る (この版で") {
 		t.Errorf("前の版のタスクを、この版で進めたタスクとして表示した:\n%s", out)
 	}
 
@@ -214,8 +206,7 @@ func TestBuildWithoutTasks(t *testing.T) {
 	assertContains(t, out,
 		"ブランチを作ったタスクはありません。\n",
 		"## 先送りした指摘\n\nなし\n",
-		"## 人を待った履歴\n\nなし\n",
-		"## 所要時間\n\n記録なし\n",
+		"## タスクごとの変更\n\nなし\n",
 		"保護領域を宣言したタスクはありません。\n",
 		"確認する項目はありません。\n",
 	)
@@ -226,7 +217,7 @@ func TestBuildUnreadableChanges(t *testing.T) {
 
 	in := newInput(t, testPlan)
 	in.Changes["1-1"] = Changes{Err: "git log が失敗しました\nunknown revision"}
-	assertContains(t, string(Build(in)), "- 変更: 読めません (git log が失敗しました unknown revision)\n")
+	assertContains(t, string(Build(in)), "| 読めません (git log が失敗しました unknown revision) |")
 }
 
 func TestBuildMergePRs(t *testing.T) {
@@ -264,7 +255,7 @@ func TestBuildMissingBranches(t *testing.T) {
 	in := newInput(t, testPlan)
 	in.Changes["1-1"] = Changes{Missing: []string{"demo-1-1", "develop"}}
 	out := string(Build(in))
-	assertContains(t, out, "- 変更: ブランチ `demo-1-1`・`develop` がローカルに残っていないため示せません\n")
+	assertContains(t, out, "| ブランチ `demo-1-1`・`develop` がローカルに残っていないため示せません |")
 	if strings.Contains(out, "読めません") {
 		t.Errorf("ブランチが残っていないときにgitのエラーを示している:\n%s", out)
 	}
@@ -432,16 +423,10 @@ func TestBuildAssignee(t *testing.T) {
 		want        string
 	}{
 		{
-			name:        "人の担当を人を待った履歴に表示する",
-			old:         "- [x] **1-2**: [shimbaco] タグを付ける",
-			replacement: "- [x] **1-2**: タグを付ける\n  - **担当**: shimbaco",
-			want:        "| 1-2 タグを付ける (担当: shimbaco) | 実装者 | 人が行うタスクです |",
-		},
-		{
-			name:        "ブランチを作る実装者の担当を変更の見出しに表示する",
+			name:        "ブランチを作る実装者の担当をタスクごとの変更に表示する",
 			old:         "- [x] **1-1**: [/repo/go] 状態を作る",
 			replacement: "- [x] **1-1**: [/repo/go] 状態を作る\n  - **担当**: implementer",
-			want:        "### 1-1 [/repo/go] 状態を作る (担当: implementer)\n",
+			want:        "| 1-1 [/repo/go] 状態を作る (担当: implementer) | `demo-1-1`",
 		},
 		{
 			name:        "ブランチを作らない実装者の担当をタスク一覧に表示する",
@@ -467,5 +452,75 @@ func TestBuildAssignee(t *testing.T) {
 			}
 			assertContains(t, string(Build(in)), tt.want)
 		})
+	}
+}
+
+func TestReviewVerdicts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		reviews []state.ReviewRecord
+		want    string
+	}{
+		{nil, "なし"},
+		{[]state.ReviewRecord{{Number: 1, Verdict: "Comment"}}, "Comment"},
+		{[]state.ReviewRecord{{Number: 1, Verdict: "Request Changes"}, {Number: 2, Verdict: "Approve"}}, "Request Changes → Approve"},
+	}
+	for _, tt := range tests {
+		if got := reviewVerdicts(tt.reviews); got != tt.want {
+			t.Errorf("reviewVerdicts(%+v) = %q、期待値 = %q", tt.reviews, got, tt.want)
+		}
+	}
+}
+
+func TestBuildEscapesExpectedLines(t *testing.T) {
+	t.Parallel()
+
+	src := strings.Replace(testPlan, "約100行 (実装60行 + テスト40行)", "約100行 (UI|UX100行)", 1)
+	out := Build(newInput(t, src))
+	var rendered bytes.Buffer
+	if err := goldmark.New(goldmark.WithExtensions(extension.Table)).Convert(out, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, rendered.String(), "<td>約100行 (UI|UX100行)</td>\n<td>Comment</td>")
+}
+
+func TestBuildWalkthrough(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		w    *state.Walkthrough
+		want string
+	}{
+		{"記録が無ければ記録なしと書く", nil, "- 処理の流れ: 記録なし\n"},
+		{"URLはそのまま書く", &state.Walkthrough{Location: "https://wikino.app/s/demo/pages/1"}, "- 処理の流れ: https://wikino.app/s/demo/pages/1\n"},
+		{"パスはインラインコードにする", &state.Walkthrough{Location: "docs/private/plans/files/demo/walkthrough.md"}, "- 処理の流れ: `docs/private/plans/files/demo/walkthrough.md`\n"},
+		{"書かなかった理由を書く", &state.Walkthrough{Skipped: "文面だけ|直した\nため"}, `- 処理の流れ: 書いていません (文面だけ\|直した ため)` + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := newInput(t, testPlan)
+			in.Walkthrough = tt.w
+			assertContains(t, string(Build(in)), tt.want)
+		})
+	}
+}
+
+func TestChains(t *testing.T) {
+	t.Parallel()
+
+	in := newInput(t, testPlan)
+	in.State.Tasks = append(in.State.Tasks,
+		state.TaskRecord{ID: "1-2", Repo: "/repo", Dir: "/repo", Branch: "demo-1-2", Base: "demo-1-1", Prepared: true},
+		// 実装を終えていないタスクは並べない。
+		state.TaskRecord{ID: "1-3", Repo: "/repo", Dir: "/repo", Branch: "demo-1-3", Base: "demo-1-2", Prepared: true},
+	)
+	in.Events = append(in.Events, state.Event{Task: "1-2", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(110), Ended: at(115)})
+	got := Chains(in.State, in.Events)
+	if len(got) != 1 || got[0].Head.Branch != "demo-1-2" || got[0].Base != "develop" || strings.Join(got[0].Tasks, ",") != "1-1,1-2" {
+		t.Errorf("Chains() = %+v、/repoのdemo-1-2 (ベースdevelop、1-1と1-2) の1本を期待", got)
 	}
 }

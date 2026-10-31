@@ -11,6 +11,7 @@ import (
 	"github.com/korylus/tools/internal/flow/branch"
 	"github.com/korylus/tools/internal/flow/report"
 	"github.com/korylus/tools/internal/flow/state"
+	"github.com/korylus/tools/internal/plan"
 )
 
 // Reportは作業報告書の最新の版を作り直し、そのパスを返す。最新の版のあとに記録した
@@ -29,10 +30,16 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if st.Pending != nil && st.Pending.Step == state.StepWalkthrough {
+		return "", fmt.Errorf("%sの完了を記録している途中です。korylusflow wait か done で再開してから実行してください", st.Pending.Step.Label())
+	}
 	if st.Pending != nil {
 		return "", fmt.Errorf("タスク %s の完了を記録している途中です。korylusflow wait か done で再開してから実行してください", st.Pending.Task)
 	}
-	if st.Task != "" {
+	if st.Step == state.StepWalkthrough {
+		return "", errors.New("処理の流れを書いている途中です。korylusflow done で記録してから実行してください")
+	}
+	if st.Step != "" {
 		return "", fmt.Errorf("タスク %s を進めている途中です。計画書の最後まで進んでから実行してください", st.Task)
 	}
 	events, err := f.Dir.ReadEvents()
@@ -43,15 +50,21 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 		return "", errors.New("記録したステップがありません")
 	}
 
+	// 同じ版を作り直すときはその版に記録した処理の流れを使う。次の版を作るときに処理の
+	// 流れのステップを経ていなければ (ステップを足す前に作った状態など)、記録なしとして作る。
 	v := len(st.Reports)
+	var w *state.Walkthrough
 	if hasNewEvents(st, events) {
 		v++
+		w = pendingWalkthrough(st, events)
+	} else {
+		w = st.Reports[v-1].Walkthrough
 	}
-	doc, err := f.readPlan(ctx)
+	p, err := f.readPlan(ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := f.writeReport(ctx, st, doc, events, v); err != nil {
+	if err := f.writeReport(ctx, st, p, events, v, w); err != nil {
 		return "", err
 	}
 	if err := f.Dir.Save(st, f.Now()); err != nil {
@@ -60,9 +73,11 @@ func (f *Flow) Report(ctx context.Context) (string, error) {
 	return f.Dir.ReportPath(v), nil
 }
 
-// finishPlanは、計画書docの最後まで進んだ状態stで、最新の版のあとに記録したステップが
-// あれば作業報告書の次の版を作る。計画書の最後でwaitを何度呼ばれても版を増やさない。
-func (f *Flow) finishPlan(ctx context.Context, st *state.State, doc *planDoc) error {
+// finishPlanは、計画書pの最後まで進んだ状態stで、最新の版のあとに記録したステップが
+// あれば、作業報告書の次の版に進む。まだ処理の流れを書いていなければ、作業報告書を
+// 作る前に実装者が処理の流れを書くステップにする。書き終えていれば次の版を作る。
+// 計画書の最後でwaitを何度呼ばれても版を増やさない。
+func (f *Flow) finishPlan(ctx context.Context, st *state.State, p *plan.Plan) error {
 	events, err := f.Dir.ReadEvents()
 	if err != nil {
 		return err
@@ -70,7 +85,12 @@ func (f *Flow) finishPlan(ctx context.Context, st *state.State, doc *planDoc) er
 	if !hasNewEvents(st, events) {
 		return nil
 	}
-	return f.writeReport(ctx, st, doc, events, len(st.Reports)+1)
+	w := pendingWalkthrough(st, events)
+	if w == nil {
+		f.startWalkthrough(st)
+		return nil
+	}
+	return f.writeReport(ctx, st, p, events, len(st.Reports)+1, w)
 }
 
 // hasNewEventsは、最新の版の作業報告書のあとに記録したステップがあるかを返す。
@@ -82,15 +102,16 @@ func hasNewEvents(st *state.State, events []state.Event) bool {
 	return len(events) > covered
 }
 
-// writeReportは計画書docの作業報告書の版versionを組み立てて書き、状態stに記録する。
+// writeReportは計画書pの作業報告書の版versionを組み立てて書き、状態stに記録する。
 // 既にある版を作り直すときは、その版に人が書き込んだ結果を引き継ぐ。書き込みが
 // 区切りを隠していて、生成した節がコメントに取り込まれていれば作り直さない。
-func (f *Flow) writeReport(ctx context.Context, st *state.State, doc *planDoc, events []state.Event, version int) error {
+// wは版に載せる処理の流れで、版の記録に残す。次の版を作ったら、状態の未記録の処理の流れを消す。
+func (f *Flow) writeReport(ctx context.Context, st *state.State, p *plan.Plan, events []state.Event, version int, w *state.Walkthrough) error {
 	var err error
 	now := f.Now()
 	in := report.Input{
-		PlanPath: f.PlanPath, Name: f.Name, PlanSrc: doc.src, Plan: doc.Plan, Version: version, Now: now,
-		State: st, Events: events, Changes: map[string]report.Changes{},
+		PlanPath: f.PlanPath, Name: f.Name, Plan: p, Version: version, Now: now,
+		State: st, Events: events, Changes: map[string]report.Changes{}, Walkthrough: w,
 	}
 	if version > 1 {
 		in.Since = st.Reports[version-2].Events
@@ -119,11 +140,12 @@ func (f *Flow) writeReport(ctx context.Context, st *state.State, doc *planDoc, e
 	if err := f.Dir.WriteReport(version, report.Build(in)); err != nil {
 		return fmt.Errorf("作業報告書を書けません: %w", err)
 	}
-	rec := state.ReportRecord{Version: version, Events: len(events), At: now}
+	rec := state.ReportRecord{Version: version, Events: len(events), At: now, Walkthrough: w}
 	if version <= len(st.Reports) {
 		st.Reports[version-1] = rec
 	} else {
 		st.Reports = append(st.Reports, rec)
+		st.Walkthrough = nil
 	}
 	return nil
 }
@@ -157,15 +179,11 @@ func readChanges(ctx context.Context, rec state.TaskRecord) report.Changes {
 		return report.Changes{Missing: missing}
 	}
 
-	commits, err := branch.Commits(ctx, rec.Repo, rec.Base, rec.Branch)
-	if err != nil {
-		return report.Changes{Err: err.Error()}
-	}
 	files, err := branch.Changes(ctx, rec.Repo, rec.Base, rec.Branch)
 	if err != nil {
 		return report.Changes{Err: err.Error()}
 	}
-	return report.Changes{Commits: commits, Files: files}
+	return report.Changes{Files: files}
 }
 
 // latestReportは最新の版の作業報告書のパスを返す。まだ作っていなければ空文字。

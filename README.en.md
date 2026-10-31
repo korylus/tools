@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-29 -->
+<!-- last_synced: 2026-10-31 -->
 
 # korylus-tools
 
@@ -74,14 +74,14 @@ Run every subcommand at the project root.
 Specify the plan by its path relative to that root or by the URL of a Wikino page (`https://wikino.app/s/<space>/pages/<page number>`) (see "[Plan names and plans on Wikino pages](#plan-names-and-plans-on-wikino-pages)").
 The role is one of `implementer`, `reviewer-codex` (reviewer (Codex)), and `reviewer-claude` (reviewer (Claude Code)).
 
-| Subcommand | Role                                                                                                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wait`     | Wait until it is the role's turn and write the next instruction to standard output; return `action: wait` if the turn does not come within `-timeout`                  |
-| `done`     | Check and record the completion of the current step and decide the next step; for the implementation step, read verification items as a JSON array from standard input |
-| `status`   | Show the plan's progress, the current task, step, role whose turn it is, why it is waiting for a human, and the time spent                                             |
-| `report`   | Rebuild the latest version of the work report; if steps were recorded after the latest version, build the next version                                                 |
+| Subcommand | Role                                                                                                                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `wait`     | Wait until it is the role's turn and write the next instruction to standard output; return `action: wait` if the turn does not come within `-timeout`                                                                                                  |
+| `done`     | Check and record the completion of the current step and decide the next step; read verification items for the implementation step, or the walkthrough location or the reason for not writing one for the walkthrough step, as JSON from standard input |
+| `status`   | Show the plan's progress, the current task, step, role whose turn it is, why it is waiting for a human, and the time spent                                                                                                                             |
+| `report`   | Rebuild the latest version of the work report; if steps were recorded after the latest version, build the next version                                                                                                                                 |
 
-The first line of an instruction is `action: <kind>` (`implement`, `review`, `fix`, `ask`, `finish`, or `wait`).
+The first line of an instruction is `action: <kind>` (`implement`, `work`, `review`, `fix`, `ask`, `walkthrough`, `finish`, or `wait`).
 It is followed by the skill and arguments to run and every step to take afterwards, every time.
 This lets a session continue from the latest instruction alone, even after its context has been compacted.
 
@@ -124,6 +124,12 @@ When the plan cannot be read, for example because you are not logged in or hit t
 
 For tasks done by a human, findings that need a human decision, and reaching the review limit, it tells the current session to ask the human.
 
+When the plan reaches the end, before building the work report, it tells the implementer to write a walkthrough document (`action: walkthrough`).
+The instruction lists the last task branch per repository with its head commit, and the location of the walkthrough written for the previous version.
+The implementer writes the walkthrough with `/korylus-write-walkthrough` and passes its location (`{"location":"<URL or path>"}`) or the reason for not writing one (`{"skipped":"<reason>"}`) to `done`.
+The location must be a URL starting with `https://` or an existing file given as a path relative to the project root.
+`korylusflow` only records the location and the reason; it does not read the walkthrough itself.
+
 Task prefixes are read as follows.
 
 | Prefix                                           | Working directory                                            |
@@ -164,13 +170,15 @@ A task with more than one assignee line, or with an empty value, is an error tha
 When the plan reaches the end, it builds a Markdown work report `report-<version>.md` from the state, timing records, the plan, and git.
 It does not have an LLM write any text; it lists only the facts in the records.
 
-- Overview (plan, period, and the PR to merge per repository)
-- Changes per task (branch, commits, changed files and line counts, expected line counts, review results, and the topics of the implementation decision log)
+- Overview (plan, period, the walkthrough location or the reason for not writing one, and the PR to merge per repository)
+- Changes per task (a table with one row per task: branch, changed line counts, expected line counts, and review verdicts)
 - Tasks the implementer did without creating a branch
-- Deferred findings and the history of waiting for a human
-- Time spent (totals per role and step, and a breakdown per task)
+- Deferred findings
 - Protected areas (what was declared and the command to see the diff)
 - The verification checklist and a field for overall comments
+
+Time spent and time spent waiting for a human are not in the work report; `korylusflow status` shows them.
+When `report` rebuilds a version made before the walkthrough step existed, it shows the walkthrough as not recorded.
 
 `korylusflow` does not push, create PRs, or merge.
 After a human checks the work report, they create one PR per repository from the last task's branch to the first task's base branch and merge it with a merge commit.

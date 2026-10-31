@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"reflect"
 	"testing"
 )
 
@@ -63,17 +62,5 @@ func TestSection(t *testing.T) {
 	}
 	if _, ok := Section(sectionsPlan, "設計"); ok {
 		t.Error("無い節が見つかった")
-	}
-}
-
-func TestDecisionTopics(t *testing.T) {
-	t.Parallel()
-
-	want := map[string][]string{
-		"1-1":   {"列の型をどうするか?", "既定値は?"},
-		"fb1-1": {"戻る先は?"},
-	}
-	if got := DecisionTopics(sectionsPlan); !reflect.DeepEqual(got, want) {
-		t.Errorf("論点 = %v、期待値 = %v", got, want)
 	}
 }

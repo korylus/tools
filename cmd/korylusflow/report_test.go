@@ -44,7 +44,7 @@ func TestReport(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertContains(t, string(out), "# 作業報告書 第1版: korylusflow", "| 2-2 | 実装者 | 人が行うタスクです |")
+		assertContains(t, string(out), "# 作業報告書 第1版: korylusflow", "- 計画書の開始: ")
 
 		stdout.Reset()
 		if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {

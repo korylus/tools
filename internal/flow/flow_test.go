@@ -117,6 +117,20 @@ func (fx fixture) approve(t *testing.T, id string) string {
 	return msg
 }
 
+// skipWalkthroughは、計画書の最後で実装者に処理の流れの指示が来ることを確かめ、
+// 書かなかった理由を渡して完了を記録する。Doneの文面を返す。
+func (fx fixture) skipWalkthrough(t *testing.T) string {
+	t.Helper()
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionWalkthrough {
+		t.Fatalf("指示 = %+v、処理の流れの指示を期待", in)
+	}
+	msg, err := fx.done(state.RoleImplementer, `{"skipped":"テストのため"}`)
+	if err != nil {
+		t.Fatalf("処理の流れのDoneのエラー = %v", err)
+	}
+	return msg
+}
+
 // checkTaskは計画書のタスクidにチェックを付ける。
 func (fx fixture) checkTask(t *testing.T, id string) {
 	t.Helper()
@@ -280,6 +294,9 @@ func TestFlowTasks(t *testing.T) {
 	if msg := fx.approve(t, "1-3"); !strings.Contains(msg, "最後まで進みました") {
 		t.Fatalf("Done() = %q", msg)
 	}
+	if msg := fx.skipWalkthrough(t); !strings.Contains(msg, "作業報告書") {
+		t.Fatalf("処理の流れのDone() = %q", msg)
+	}
 	select {
 	case in := <-finished:
 		if in.Action != ActionFinish {
@@ -307,7 +324,7 @@ func TestFlowTasks(t *testing.T) {
 	for _, e := range events {
 		steps = append(steps, e.Task+":"+string(e.Step))
 	}
-	if got, want := strings.Join(steps, ","), "1-1:implement,1-1:review,1-2:ask,1-3:implement,1-3:review"; got != want {
+	if got, want := strings.Join(steps, ","), "1-1:implement,1-1:review,1-2:ask,1-3:implement,1-3:review,:walkthrough"; got != want {
 		t.Errorf("所要時間の記録 = %s、期待値 = %s", got, want)
 	}
 }
@@ -623,11 +640,12 @@ func TestFlowMissingPreviousBranch(t *testing.T) {
 			t.Fatalf("実装のDoneのエラー = %v", err)
 		}
 		fx.approve(t, "1-3")
+		fx.skipWalkthrough(t)
 
 		out := fx.readReport(t, 1)
 		for _, want := range []string{
-			"- 変更: ブランチ `demo-1-1` がローカルに残っていないため示せません\n",
-			"| `second.txt` | 1 | 0 |",
+			"| ブランチ `demo-1-1` がローカルに残っていないため示せません |",
+			"| `demo-1-3` (元: `main`) | テスト以外",
 			"| `" + fx.repo + "` | `demo-1-1` (ローカルに残っていません) | `main` | 1-1 |\n| `" + fx.repo + "` | `demo-1-3` | `main` | 1-3 |\n",
 		} {
 			if !strings.Contains(out, want) {
@@ -795,6 +813,7 @@ func TestFlowImplementerTask(t *testing.T) {
 		t.Fatalf("実装のDoneのエラー = %v", err)
 	}
 	fx.approve(t, "1-2")
+	fx.skipWalkthrough(t)
 
 	out := fx.readReport(t, 1)
 	for _, want := range []string{

@@ -110,3 +110,18 @@ func Exists(ctx context.Context, repo, name string) (bool, error) {
 		return false, err
 	}
 }
+
+// Headは、リポジトリrepoのブランチnameの先頭のコミットのハッシュを返す。
+// ブランチがローカルに無ければ空文字を返す。
+func Head(ctx context.Context, repo, name string) (string, error) {
+	out, err := git(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+name)
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return strings.TrimSpace(out), nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return "", nil
+	default:
+		return "", err
+	}
+}

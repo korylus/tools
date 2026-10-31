@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -146,5 +147,22 @@ func assertBranch(t *testing.T, repo, want string) {
 	}
 	if got != want {
 		t.Errorf("ブランチ = %q、期待値 = %q", got, want)
+	}
+}
+
+func TestHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	repo := newRepoOn(t, "main")
+	want, err := git(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Head(ctx, repo, "main"); err != nil || got != strings.TrimSpace(want) {
+		t.Errorf("Head(main) = %q, %v、期待値 = %q", got, err, strings.TrimSpace(want))
+	}
+	if got, err := Head(ctx, repo, "missing"); err != nil || got != "" {
+		t.Errorf("Head(missing) = %q, %v、無いブランチでは空文字を期待", got, err)
 	}
 }

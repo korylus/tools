@@ -7,13 +7,6 @@ import (
 	"strings"
 )
 
-// Commitはコミット1件。
-type Commit struct {
-	// Hashは短縮したコミットのハッシュ。
-	Hash    string
-	Subject string
-}
-
 // FileChangeは変更したファイル1件の行数。
 type FileChange struct {
 	Path    string
@@ -21,23 +14,6 @@ type FileChange struct {
 	Removed int
 	// Binaryは、バイナリのファイルで行数を数えられないかどうか。
 	Binary bool
-}
-
-// Commitsは、リポジトリrepoでbaseに無くheadにあるコミットを、古い順に返す。
-func Commits(ctx context.Context, repo, base, head string) ([]Commit, error) {
-	out, err := git(ctx, repo, "log", "--reverse", "--format=%h%x09%s", base+".."+head)
-	if err != nil {
-		return nil, err
-	}
-	var commits []Commit
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		if line == "" {
-			continue
-		}
-		hash, subject, _ := strings.Cut(line, "\t")
-		commits = append(commits, Commit{Hash: hash, Subject: subject})
-	}
-	return commits, nil
 }
 
 // Changesは、リポジトリrepoでbaseとheadの分岐点からheadまでに変更したファイルを返す。

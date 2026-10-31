@@ -102,9 +102,13 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 
 	where := fmt.Sprintf("タスク %s の%s", st.Task, st.Step.Label())
 	switch {
+	case st.Pending != nil && st.Pending.Step == state.StepWalkthrough:
+		fmt.Fprintf(w, "状態: %sの完了を記録中 (waitかdoneで再開できます)\n", st.Pending.Step.Label())
 	case st.Pending != nil:
 		fmt.Fprintf(w, "状態: タスク %s の%sの完了を記録中 (waitかdoneで再開できます)\n", st.Pending.Task, st.Pending.Step.Label())
-	case st.Task == "":
+	case st.Step == state.StepWalkthrough:
+		fmt.Fprintln(w, "状態: 作業報告書を作る前に、処理の流れを書いています")
+	case st.Step == "":
 		fmt.Fprintln(w, "状態: 進めているタスクなし")
 	case st.Ask != nil:
 		fmt.Fprintf(w, "状態: 人を待っています (%s)\n", where)
