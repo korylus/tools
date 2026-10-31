@@ -225,3 +225,44 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusWalkthrough(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	tests := []struct {
+		name string
+		st   *state.State
+		want string
+	}{
+		{
+			name: "処理の流れを書いている",
+			st:   &state.State{Step: state.StepWalkthrough, Role: state.RoleImplementer, Since: now.Add(-time.Minute)},
+			want: "状態: 作業報告書を作る前に、処理の流れを書いています\n番の役割: 実装者 (implementer)\n",
+		},
+		{
+			name: "処理の流れの完了を記録している",
+			st:   &state.State{Pending: &state.Event{Step: state.StepWalkthrough, Role: state.RoleImplementer, Started: now.Add(-time.Minute), Ended: now}},
+			want: "状態: 処理の流れの作成の完了を記録中 (waitかdoneで再開できます)\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			planPath := writePlan(t)
+			stateRoot := t.TempDir()
+			if err := state.NewDir(stateRoot, "korylusflow").Save(tt.st, now); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := status(context.Background(), []string{planPath}, stateRoot, now, &stdout, &stderr); code != exitOK {
+				t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
+			}
+			assertContains(t, stdout.String(), tt.want)
+			if strings.Contains(stdout.String(), "進めているタスクなし") || strings.Contains(stdout.String(), "タスク  の") {
+				t.Errorf("処理の流れのステップを、タスクのステップとして表示した:\n%s", stdout.String())
+			}
+		})
+	}
+}

@@ -19,6 +19,7 @@ func runDone(args []string, stdout, stderr io.Writer) int {
 
 // doneは役割が進めているステップの完了を記録する。
 // ブランチを作る実装タスクでは、stdinから動作確認の項目をJSONの配列で読む。
+// 処理の流れのステップでは、stdinから処理の流れの場所か書かなかった理由をJSONで読む。
 // [implementer] のタスクでは、計画書のチェックを確かめ、stdinは読まない。
 func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("done", flag.ContinueOnError)
@@ -26,7 +27,7 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 	roleFlag := flags.String("role", "", "役割 (implementer / reviewer-codex / reviewer-claude)")
 	reviewLimitFlag := flags.Int("review-limit", 0, "上限に達したタスクの新しいレビュー上限 (例: 3回からあと3回続ける場合は6)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書> -role=<役割> [-review-limit=<新しい上限>] [< 動作確認の項目のJSON]")
+		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書> -role=<役割> [-review-limit=<新しい上限>] [< 動作確認の項目か処理の流れのJSON]")
 		flags.PrintDefaults()
 	}
 	planPath, err := parsePlanArgs(flags, args)

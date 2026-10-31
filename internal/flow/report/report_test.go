@@ -154,7 +154,7 @@ func TestBuildNextVersion(t *testing.T) {
 	out := string(Build(in))
 	assertContains(t, out,
 		"- この版の期間: 2026-10-22 12:20 +00:00 〜 2026-10-22 14:00 +00:00\n",
-		"- 前の版: 第1版\n\n前の版の全体へのコメント:\n\n> フォントが小さい\n",
+		"- 前の版: 第1版\n- 処理の流れ: 記録なし\n\n前の版の全体へのコメント:\n\n> フォントが小さい\n",
 		"| fb1-1 [/repo/go] 一覧を直す (この版で進めたタスク) | `demo-fb1-1` (元: `demo-1-1`) | テスト以外0行・テスト0行 | 記載なし | なし |\n",
 		"| `/repo` | `demo-fb1-1` | `develop` | 1-1・fb1-1 |\n",
 		"### #1 statusを表示できる\n\n<!-- item: task/1-1/1 -->\n",
@@ -483,4 +483,44 @@ func TestBuildEscapesExpectedLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContains(t, rendered.String(), "<td>約100行 (UI|UX100行)</td>\n<td>Comment</td>")
+}
+
+func TestBuildWalkthrough(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		w    *state.Walkthrough
+		want string
+	}{
+		{"記録が無ければ記録なしと書く", nil, "- 処理の流れ: 記録なし\n"},
+		{"URLはそのまま書く", &state.Walkthrough{Location: "https://wikino.app/s/demo/pages/1"}, "- 処理の流れ: https://wikino.app/s/demo/pages/1\n"},
+		{"パスはインラインコードにする", &state.Walkthrough{Location: "docs/private/plans/files/demo/walkthrough.md"}, "- 処理の流れ: `docs/private/plans/files/demo/walkthrough.md`\n"},
+		{"書かなかった理由を書く", &state.Walkthrough{Skipped: "文面だけ|直した\nため"}, `- 処理の流れ: 書いていません (文面だけ\|直した ため)` + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := newInput(t, testPlan)
+			in.Walkthrough = tt.w
+			assertContains(t, string(Build(in)), tt.want)
+		})
+	}
+}
+
+func TestChains(t *testing.T) {
+	t.Parallel()
+
+	in := newInput(t, testPlan)
+	in.State.Tasks = append(in.State.Tasks,
+		state.TaskRecord{ID: "1-2", Repo: "/repo", Dir: "/repo", Branch: "demo-1-2", Base: "demo-1-1", Prepared: true},
+		// 実装を終えていないタスクは並べない。
+		state.TaskRecord{ID: "1-3", Repo: "/repo", Dir: "/repo", Branch: "demo-1-3", Base: "demo-1-2", Prepared: true},
+	)
+	in.Events = append(in.Events, state.Event{Task: "1-2", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(110), Ended: at(115)})
+	got := Chains(in.State, in.Events)
+	if len(got) != 1 || got[0].Head.Branch != "demo-1-2" || got[0].Base != "develop" || strings.Join(got[0].Tasks, ",") != "1-1,1-2" {
+		t.Errorf("Chains() = %+v、/repoのdemo-1-2 (ベースdevelop、1-1と1-2) の1本を期待", got)
+	}
 }

@@ -79,14 +79,18 @@ const (
 	StepReview    Step = "review"
 	StepFix       Step = "fix"
 	StepAsk       Step = "ask"
+	// StepWalkthroughは、計画書の最後に作業報告書を作る前に、実装者が処理の流れを書くステップ。
+	// タスクに属さないため、状態と所要時間の記録のタスク番号は空にする。
+	StepWalkthrough Step = "walkthrough"
 )
 
 // stepLabelsはステップの表示名。
-var stepLabels = map[Step]string{
-	StepImplement: "実装",
-	StepReview:    "レビュー",
-	StepFix:       "修正",
-	StepAsk:       "人への確認",
+var stepLabels = map[Step]string{ //#nosec G101 -- ステップの表示名で、資格情報ではない (StepWalkthroughの「pW」がパスワードの名前に見なされる)
+	StepImplement:   "実装",
+	StepReview:      "レビュー",
+	StepFix:         "修正",
+	StepAsk:         "人への確認",
+	StepWalkthrough: "処理の流れの作成",
 }
 
 // Labelはステップの表示名を返す。未知のステップは値をそのまま返す。
@@ -99,9 +103,10 @@ func (s Step) Label() string {
 
 // Stateは1つの計画書の状態。
 type State struct {
-	// Taskは進めているタスク番号。進めているタスクが無ければ空文字。
+	// Taskは進めているタスク番号。進めているタスクが無いときと、タスクに属さない
+	// ステップ (処理の流れの作成) を進めているときは空文字。
 	Task string `json:"task,omitempty"`
-	// Stepは進めているステップ。doneで完了が記録されるまで変えず、
+	// Stepは進めているステップで、無ければ空文字。doneで完了が記録されるまで変えず、
 	// 次に尋ねられたときも同じ指示を返す。
 	Step Step `json:"step,omitempty"`
 	// Roleは番の役割。
@@ -115,11 +120,14 @@ type State struct {
 	ReviewBefore string `json:"review_before,omitempty"`
 	// Tasksはkorylusflowが扱ったタスクを、扱い始めた順に並べたもの。
 	Tasks []TaskRecord `json:"tasks,omitempty"`
+	// Walkthroughは、処理の流れのステップで受け取り、まだ作業報告書の版に記録していない
+	// 処理の流れの場所か書かなかった理由。次に作る版の記録に移す。
+	Walkthrough *Walkthrough `json:"walkthrough,omitempty"`
 	// Reportsは作った作業報告書の版を、作った順に並べたもの。
 	Reports []ReportRecord `json:"reports,omitempty"`
 	// Pendingは完了を確認済みのステップ。次のブランチの準備や履歴の記録中に
 	// 落ちても、完了条件を確かめ直さずに続きを実行するために残す。
-	// Taskが空なら次のステップは未選択で、入っていれば準備済み。
+	// Stepが空なら次のステップは未選択で、入っていれば準備済み。
 	Pending *Event `json:"pending,omitempty"`
 	// UpdatedAtは状態を最後に書き込んだ時刻。
 	UpdatedAt time.Time `json:"updated_at"`
@@ -216,6 +224,17 @@ type ReportRecord struct {
 	// 計画書の最後で次の版を作る。
 	Events int       `json:"events"`
 	At     time.Time `json:"at"`
+	// Walkthroughは、この版を作る前に書いた処理の流れの場所か書かなかった理由。
+	// 処理の流れのステップを足す前に作った版ではnil。
+	Walkthrough *Walkthrough `json:"walkthrough,omitempty"`
+}
+
+// Walkthroughは処理の流れの場所か、書かなかった理由。どちらか一方だけを持つ。
+type Walkthrough struct {
+	// Locationは処理の流れの場所 (`https://` で始まるURLか、プロジェクトのルートからの相対パス)。
+	Location string `json:"location,omitempty"`
+	// Skippedは処理の流れを書かなかった理由。
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // TaskRecordはタスク番号idの記録を返す。まだ扱っていなければnilを返す。

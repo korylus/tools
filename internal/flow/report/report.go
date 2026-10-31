@@ -50,6 +50,9 @@ type Input struct {
 	// Currentは、同じ版を作り直すときに、その版に書き込まれていた結果。
 	// 人の書き込みを消さないよう引き継ぐ。新しい版ではnil。
 	Current *Results
+	// Walkthroughは、この版を作る前に書いた処理の流れの場所か書かなかった理由。
+	// 処理の流れのステップを足す前に作った版ではnil。本文は読まず、場所だけを載せる。
+	Walkthrough *state.Walkthrough
 }
 
 // Changesはタスク1件のブランチの変更。
@@ -91,20 +94,12 @@ func newBuilder(in Input) *builder {
 	for _, t := range in.Plan.Tasks {
 		b.tasks[t.ID] = t
 	}
-	implemented := map[string]bool{}
 	for i, e := range in.Events {
-		if e.Step == state.StepImplement {
-			implemented[e.Task] = true
-		}
 		if i >= in.Since {
 			b.added[e.Task] = true
 		}
 	}
-	for _, rec := range in.State.Tasks {
-		if rec.Prepared && implemented[rec.ID] {
-			b.records = append(b.records, rec)
-		}
-	}
+	b.records = reported(in.State, in.Events)
 	// 実装のステップを記録したのに記録を持たないタスクは、ブランチを作らずに行ったタスク。
 	for _, e := range in.Events {
 		if e.Step == state.StepImplement && in.State.TaskRecord(e.Task) == nil && !slices.Contains(b.works, e.Task) {
@@ -130,9 +125,10 @@ func (b *builder) overview() {
 	}
 	if p := in.Previous; p != nil {
 		b.f("- 前の版: 第%d版\n", in.Version-1)
-		if p.Comment != "" {
-			b.f("\n前の版の全体へのコメント:\n\n%s\n", quote(p.Comment))
-		}
+	}
+	b.f("- 処理の流れ: %s\n", walkthrough(in.Walkthrough))
+	if p := in.Previous; p != nil && p.Comment != "" {
+		b.f("\n前の版の全体へのコメント:\n\n%s\n", quote(p.Comment))
 	}
 
 	b.f("\n### マージするPR\n\n")
@@ -143,13 +139,13 @@ func (b *builder) overview() {
 	b.f("リポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n\n")
 	b.f("| リポジトリ | PRにするブランチ | ベース | 含むタスク |\n| --- | --- | --- | --- |\n")
 	split := false
-	for _, c := range b.chains() {
-		head := code(c.head.Branch)
-		if slices.Contains(b.in.Changes[c.head.ID].Missing, c.head.Branch) {
+	for _, c := range chains(b.records) {
+		head := code(c.Head.Branch)
+		if slices.Contains(b.in.Changes[c.Head.ID].Missing, c.Head.Branch) {
 			head += " (ローカルに残っていません)"
 		}
-		b.f("| %s | %s | %s | %s |\n", code(c.head.Repo), head, code(c.base), strings.Join(c.tasks, "・"))
-		split = split || c.split
+		b.f("| %s | %s | %s | %s |\n", code(c.Head.Repo), head, code(c.Base), strings.Join(c.Tasks, "・"))
+		split = split || c.Split
 	}
 	if split {
 		b.f("\n同じリポジトリに複数の行があるときは、ブランチが1本に繋がっていません (前のタスクのブランチが残っておらず、最初のベースから作り直したなど)。\n")
@@ -158,42 +154,79 @@ func (b *builder) overview() {
 	b.f("\n")
 }
 
-// chainは、1つのPRにまとめてマージする、元のブランチで1本に繋がったタスクのブランチの並び。
-type chain struct {
-	// headはPRにするブランチを持つ、並びの最後のタスクの記録。
-	head state.TaskRecord
-	// baseは並びの最初のタスクの元のブランチで、PRのベースにする。
-	base  string
-	tasks []string
-	// splitは、同じリポジトリの前の並びと繋がっていない並びかどうか。
-	split bool
+// Chainは、1つのPRにまとめてマージする、元のブランチで1本に繋がったタスクのブランチの並び。
+type Chain struct {
+	// HeadはPRにするブランチを持つ、並びの最後のタスクの記録。
+	Head state.TaskRecord
+	// Baseは並びの最初のタスクの元のブランチで、PRのベースにする。
+	Base  string
+	Tasks []string
+	// Splitは、同じリポジトリの前の並びと繋がっていない並びかどうか。
+	Split bool
 }
 
-// chainsは、作業報告書に載せるタスクを、リポジトリごとに元のブランチで繋がった並びにまとめる。
+// Chainsは、作業報告書に載せるタスクを、作業報告書の「マージするPR」と同じ並びにまとめる。
+// 処理の流れのステップの指示に、リポジトリごとの最後のタスクのブランチを書くのに使う。
+func Chains(st *state.State, events []state.Event) []Chain {
+	return chains(reported(st, events))
+}
+
+// reportedは、作業報告書に載せるタスク (ブランチを準備し、実装を終えたもの) の記録を返す。
+func reported(st *state.State, events []state.Event) []state.TaskRecord {
+	implemented := map[string]bool{}
+	for _, e := range events {
+		if e.Step == state.StepImplement {
+			implemented[e.Task] = true
+		}
+	}
+	var records []state.TaskRecord
+	for _, rec := range st.Tasks {
+		if rec.Prepared && implemented[rec.ID] {
+			records = append(records, rec)
+		}
+	}
+	return records
+}
+
+// chainsは、タスクの記録recordsを、リポジトリごとに元のブランチで繋がった並びにまとめる。
 // リポジトリは最初にタスクを進めた順、並びはリポジトリの中でタスクを進めた順に並べる。
-func (b *builder) chains() []chain {
+func chains(records []state.TaskRecord) []Chain {
 	var repos []string
-	for _, rec := range b.records {
+	for _, rec := range records {
 		if !slices.Contains(repos, rec.Repo) {
 			repos = append(repos, rec.Repo)
 		}
 	}
-	var chains []chain
+	var result []Chain
 	for _, repo := range repos {
-		first := len(chains)
-		for _, rec := range b.records {
+		first := len(result)
+		for _, rec := range records {
 			if rec.Repo != repo {
 				continue
 			}
-			if last := len(chains) - 1; last >= first && chains[last].head.Branch == rec.Base {
-				chains[last].head = rec
-				chains[last].tasks = append(chains[last].tasks, rec.ID)
+			if last := len(result) - 1; last >= first && result[last].Head.Branch == rec.Base {
+				result[last].Head = rec
+				result[last].Tasks = append(result[last].Tasks, rec.ID)
 				continue
 			}
-			chains = append(chains, chain{head: rec, base: rec.Base, tasks: []string{rec.ID}, split: len(chains) > first})
+			result = append(result, Chain{Head: rec, Base: rec.Base, Tasks: []string{rec.ID}, Split: len(result) > first})
 		}
 	}
-	return chains
+	return result
+}
+
+// walkthroughは、処理の流れの場所か書かなかった理由を、概要の1行に入れる形で表す。
+// URLはそのまま開けるようにし、パスはインラインコードにする。
+func walkthrough(w *state.Walkthrough) string {
+	switch {
+	case w == nil:
+		return "記録なし"
+	case w.Skipped != "":
+		return "書いていません (" + cell(w.Skipped) + ")"
+	case strings.HasPrefix(w.Location, "https://"):
+		return cell(w.Location)
+	}
+	return code(w.Location)
 }
 
 func (b *builder) taskChanges() {
