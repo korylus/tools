@@ -95,6 +95,13 @@ func parseWalkthrough(r io.Reader, root string) (*state.Walkthrough, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("処理の流れの記録を読み取れません: %w", err)
 	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("処理の流れのJSONは1つだけ渡してください")
+		}
+		return nil, fmt.Errorf("処理の流れの記録を読み取れません: %w", err)
+	}
 
 	switch {
 	case raw.Location != nil && raw.Skipped != nil:

@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ func TestParseWalkthrough(t *testing.T) {
 		{name: "URLを受け付ける", input: `{"location":"https://wikino.app/s/demo/pages/1"}`, want: state.Walkthrough{Location: "https://wikino.app/s/demo/pages/1"}},
 		{name: "あるファイルのパスを受け付ける", input: `{"location":" docs/private/plans/files/demo/walkthrough.md "}`, want: state.Walkthrough{Location: "docs/private/plans/files/demo/walkthrough.md"}},
 		{name: "書かなかった理由を受け付ける", input: `{"skipped":"文面だけを直したため"}`, want: state.Walkthrough{Skipped: "文面だけを直したため"}},
+		{name: "末尾の空白を受け付ける", input: "{\"skipped\":\"文面だけを直したため\"} \n\t", want: state.Walkthrough{Skipped: "文面だけを直したため"}},
 		{name: "空の入力は書き忘れ", input: "\n", wantErr: "標準入力からJSONで渡してください"},
 		{name: "どちらも無い", input: `{}`, wantErr: "標準入力からJSONで渡してください"},
 		{name: "両方ある", input: `{"location":"https://example.com","skipped":"理由"}`, wantErr: "どちらか一方だけ"},
@@ -117,5 +119,53 @@ func TestFlowWalkthroughCompatibility(t *testing.T) {
 	}
 	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionFinish {
 		t.Errorf("指示 = %+v、新しいステップが無いため終了を期待", in)
+	}
+}
+
+func TestFlowWalkthroughRejectsTrailingJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{"末尾に不正な文字列", "{\"skipped\":\"文面だけのため\"} garbage", "処理の流れの記録を読み取れません"},
+		{"末尾に別のオブジェクト", "{\"skipped\":\"文面だけのため\"} {\"location\":\"https://wikino.app/s/demo/pages/1\"}", "処理の流れのJSONは1つだけ"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fx := newFixture(t, "- [ ] **1-1**: [shimbaco] 確かめる")
+			fx.wait(t, state.RoleImplementer)
+			fx.checkTask(t, "1-1")
+			if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+				t.Fatal(err)
+			}
+			before, err := fx.flow.Dir.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = fx.done(state.RoleImplementer, tt.input)
+			assertRejected(t, err, tt.wantErr)
+			after, err := fx.flow.Dir.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Errorf("拒否後の状態 = %+v、期待値 = %+v", after, before)
+			}
+			events, err := fx.flow.Dir.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 1 || events[0].Step != state.StepAsk {
+				t.Errorf("拒否後の履歴 = %+v、人が行うタスクの履歴1件を期待", events)
+			}
+			if _, err := os.Stat(fx.flow.Dir.ReportPath(1)); !os.IsNotExist(err) {
+				t.Errorf("拒否後の報告書のStatのエラー = %v、ファイルが無いエラーを期待", err)
+			}
+		})
 	}
 }
