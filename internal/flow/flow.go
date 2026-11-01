@@ -349,7 +349,7 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 // trは進めているタスクか作業報告書のレビューの記録で、人が行うタスクではnil。
 func (f *Flow) finishAsk(ctx context.Context, st *state.State, p *plan.Plan, tr *state.ReviewTrail, now time.Time) error {
 	if st.Ask == nil {
-		return fmt.Errorf("タスク %s で人に尋ねている理由がありません", st.Task)
+		return fmt.Errorf("%sの理由がありません", state.Where(st.Task, st.Step))
 	}
 	switch st.Ask.Kind {
 	case state.AskHumanTask:
