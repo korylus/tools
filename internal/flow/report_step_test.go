@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -46,7 +47,7 @@ func TestParseReport(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || got != tt.want {
+			if err != nil || !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseReport() = %+v, %v、期待値 = %+v", got, err, tt.want)
 			}
 		})
@@ -110,7 +111,7 @@ func TestFlowReportAfterAddedTask(t *testing.T) {
 	if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 		t.Fatal(err)
 	}
-	if _, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`"}`); err != nil {
+	if _, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`","walkthrough_skipped":"足す前の理由"}`); err != nil {
 		t.Fatal(err)
 	}
 	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionAsk || in.Task != "1-2" {
@@ -164,7 +165,7 @@ func TestFlowReportLegacyState(t *testing.T) {
 			if in := fx.wait(t, state.RoleImplementer); in.Action != ActionReport || in.PreviousReport != "" {
 				t.Fatalf("指示 = %+v、作業報告書を新しく作る指示を期待", in)
 			}
-			if _, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`"}`); err != nil {
+			if _, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`","walkthrough_skipped":"テストのため"}`); err != nil {
 				t.Fatal(err)
 			}
 			st, err := fx.flow.Dir.Load()
@@ -295,5 +296,157 @@ func TestFlowReportRejectsTrailingJSON(t *testing.T) {
 				t.Errorf("拒否後の履歴 = %+v、人が行うタスクの履歴1件を期待", events)
 			}
 		})
+	}
+}
+
+// startReportReviewFixtureは、ブランチを作らない1タスクの計画書を最後まで進め、処理の流れを書いた
+// 作業報告書を記録して、作業報告書のレビューのステップにする。
+func startReportReviewFixture(t *testing.T) fixture {
+	t.Helper()
+	fx := newFixture(t, "- [ ] **1-1**: [shimbaco] タグを付ける")
+	fx.wait(t, state.RoleImplementer)
+	fx.checkTask(t, "1-1")
+	if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+		t.Fatal(err)
+	}
+	fx.wait(t, state.RoleImplementer)
+	if _, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	return fx
+}
+
+// writeReportReviewは、作業報告書のレビューの連番nのレビュードキュメントを書き、パスを返す。
+func (fx fixture) writeReportReview(t *testing.T, n int, content string) string {
+	t.Helper()
+	name := fmt.Sprintf("docs/private/reviews/demo-report-%03d.md", n)
+	writeFile(t, fx.flow.Root, name, content)
+	return name
+}
+
+func TestFlowReportReviewRequestChanges(t *testing.T) {
+	t.Parallel()
+
+	fx := startReportReviewFixture(t)
+	if in := fx.wait(t, state.RoleReviewerCodex); in.Action != ActionReview || in.ReviewNumber != 1 {
+		t.Fatalf("指示 = %+v、作業報告書の1回目のレビューを期待", in)
+	}
+	doc := fx.writeReportReview(t, 1, reviewDoc("Request Changes", autoFix))
+	msg, err := fx.done(state.RoleReviewerCodex, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "次は作業報告書の修正で、reviewer-codex の番です") {
+		t.Errorf("Done() = %q", msg)
+	}
+	if src := fx.readDoc(t, doc); !strings.Contains(src, "- [x] 名前を変える (推奨)") {
+		t.Errorf("推奨どおりの回答が無い:\n%s", src)
+	}
+
+	// 修正は作業報告書の下書きを書き換えるだけなので、ブランチとコミットを確かめない。
+	in := fx.wait(t, state.RoleReviewerCodex)
+	if in.Action != ActionFix || in.ReviewDoc != doc {
+		t.Fatalf("指示 = %+v、作業報告書の修正を期待", in)
+	}
+	for _, want := range []string{"report: " + testReportURL + "\n", "作業報告書 " + testReportURL + " の下書きを書き換えて修正する", "コミットしない"} {
+		if !strings.Contains(in.String(), want) {
+			t.Errorf("指示に %q が無い:\n%s", want, in.String())
+		}
+	}
+	if strings.Contains(in.String(), "/korylus-commit") {
+		t.Errorf("作業報告書の修正でコミットを指示している:\n%s", in.String())
+	}
+	writeFile(t, fx.repo, "wip.txt", "作業報告書と関係の無い変更\n")
+	if _, err := fx.done(state.RoleReviewerCodex, ""); err != nil {
+		t.Fatalf("作業報告書の修正のDoneのエラー = %v", err)
+	}
+
+	// 再レビューは前回と別の役割が行う。
+	if in := fx.wait(t, state.RoleReviewerClaude); in.Action != ActionReview || in.ReviewNumber != 2 {
+		t.Fatalf("指示 = %+v、Claude Codeの2回目のレビューを期待", in)
+	}
+	fx.writeReportReview(t, 2, reviewDoc("Approve", ""))
+	if msg, err := fx.done(state.RoleReviewerClaude, ""); err != nil || !strings.Contains(msg, "作業報告書: "+testReportURL) {
+		t.Fatalf("2回目のレビューのDone() = %q, %v", msg, err)
+	}
+
+	// レビューのステップは次の回の作業報告書のきっかけに数えず、終了する。
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionFinish || in.Report != testReportURL {
+		t.Fatalf("指示 = %+v、終了を期待", in)
+	}
+	st := fx.load(t)
+	events, err := fx.flow.Dir.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []string
+	for _, e := range events {
+		steps = append(steps, e.Task+":"+string(e.Step))
+	}
+	if got, want := strings.Join(steps, ","), "1-1:ask,:report,:review,:fix,:review"; got != want {
+		t.Errorf("所要時間の記録 = %s、期待値 = %s", got, want)
+	}
+	r := st.Reports[0]
+	if r.Events != len(events) || r.ReviewPrefix != "demo-report" || len(r.Reviews) != 2 ||
+		r.Reviews[0].Verdict != "Request Changes" || r.Reviews[1].Role != state.RoleReviewerClaude {
+		t.Errorf("作業報告書の記録 = %+v", r)
+	}
+}
+
+func TestFlowReportReviewAskHuman(t *testing.T) {
+	t.Parallel()
+
+	fx := startReportReviewFixture(t)
+	fx.wait(t, state.RoleReviewerCodex)
+	doc := fx.writeReportReview(t, 1, reviewDoc("Comment", needsHuman))
+	if _, err := fx.done(state.RoleReviewerCodex, ""); err != nil {
+		t.Fatal(err)
+	}
+	in := fx.wait(t, state.RoleReviewerCodex)
+	if in.Action != ActionAsk || in.Ask.Kind != state.AskReview || in.ReportReview == nil {
+		t.Fatalf("指示 = %+v、作業報告書のレビューについての人への確認を期待", in)
+	}
+	_, err := fx.done(state.RoleReviewerCodex, "")
+	assertRejected(t, err, "まだ対応方針に回答の無い指摘があります")
+
+	src := strings.Replace(fx.readDoc(t, doc), "依存を逆にする (推奨)\n- [ ] 現状維持", "依存を逆にする (推奨)\n- [x] 現状維持", 1)
+	writeFile(t, fx.flow.Root, doc, src)
+	if msg, err := fx.done(state.RoleReviewerCodex, ""); err != nil || !strings.Contains(msg, "計画書の最後まで進みました") {
+		t.Fatalf("人への確認のDone() = %q, %v", msg, err)
+	}
+	if r := fx.load(t).Reports[0]; len(r.Deferred) != 1 || r.Deferred[0].Choice != "現状維持" {
+		t.Errorf("先送りした指摘 = %+v", r.Deferred)
+	}
+}
+
+func TestFlowReportReviewLimit(t *testing.T) {
+	t.Parallel()
+
+	fx := startReportReviewFixture(t)
+	for n, role := range []state.Role{state.RoleReviewerCodex, state.RoleReviewerClaude, state.RoleReviewerCodex} {
+		if in := fx.wait(t, role); in.Action != ActionReview || in.ReviewNumber != n+1 {
+			t.Fatalf("指示 = %+v、%d回目のレビューを期待", in, n+1)
+		}
+		fx.writeReportReview(t, n+1, reviewDoc("Request Changes", autoFix))
+		if _, err := fx.done(role, ""); err != nil {
+			t.Fatal(err)
+		}
+		if n == 2 {
+			break
+		}
+		if in := fx.wait(t, role); in.Action != ActionFix {
+			t.Fatalf("指示 = %+v、修正を期待", in)
+		}
+		if _, err := fx.done(role, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := fx.wait(t, state.RoleReviewerCodex)
+	if in.Action != ActionAsk || in.Ask.Kind != state.AskReviewLimit ||
+		!strings.Contains(strings.Join(in.Ask.Details, "\n"), "再レビューせずに作業報告書のレビューを終えます") {
+		t.Fatalf("指示 = %+v、作業報告書のレビューの上限での人への確認を期待", in)
+	}
+	if st := fx.load(t); st.Task != "" || state.Where(st.Task, st.Step) != "作業報告書のレビューについての人への確認" {
+		t.Errorf("状態 = %+v", st)
 	}
 }

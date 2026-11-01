@@ -99,12 +99,10 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 		return
 	}
 
-	where := fmt.Sprintf("タスク %s の%s", st.Task, st.Step.Label())
+	where := state.Where(st.Task, st.Step)
 	switch {
-	case st.Pending != nil && st.Pending.Task == "":
-		fmt.Fprintf(w, "状態: %sの完了を記録中 (waitかdoneで再開できます)\n", st.Pending.Step.Label())
 	case st.Pending != nil:
-		fmt.Fprintf(w, "状態: タスク %s の%sの完了を記録中 (waitかdoneで再開できます)\n", st.Pending.Task, st.Pending.Step.Label())
+		fmt.Fprintf(w, "状態: %sの完了を記録中 (waitかdoneで再開できます)\n", state.Where(st.Pending.Task, st.Pending.Step))
 	case st.Step == state.StepReport:
 		fmt.Fprintln(w, "状態: 計画書の最後まで進み、作業報告書を書いています")
 	case st.Step == "":
@@ -120,13 +118,19 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 	if !st.Since.IsZero() {
 		fmt.Fprintf(w, "ステップの開始: %s (経過 %s)\n", st.Since.Format(timeLayout), formatDuration(now.Sub(st.Since)))
 	}
+	var trail *state.ReviewTrail
 	if rec := st.TaskRecord(st.Task); rec != nil {
 		fmt.Fprintf(w, "リポジトリ: %s (作業するディレクトリ: %s)\n", rec.Repo, rec.Dir)
 		fmt.Fprintf(w, "ブランチ: %s (ベース: %s)\n", rec.Branch, rec.Base)
-		if n := len(rec.Reviews); n > 0 {
-			fmt.Fprintf(w, "レビュー: %d回 (最新の評価: %s)\n", n, rec.Reviews[n-1].Verdict)
-			if rec.ReviewLimit > 0 {
-				fmt.Fprintf(w, "レビューの上限: %d回\n", rec.ReviewLimit)
+		trail = &rec.ReviewTrail
+	} else if st.Task == "" && st.Step != "" && st.Step != state.StepReport && len(st.Reports) > 0 {
+		trail = &st.Reports[len(st.Reports)-1].ReviewTrail
+	}
+	if trail != nil {
+		if n := len(trail.Reviews); n > 0 {
+			fmt.Fprintf(w, "レビュー: %d回 (最新の評価: %s)\n", n, trail.Reviews[n-1].Verdict)
+			if trail.ReviewLimit > 0 {
+				fmt.Fprintf(w, "レビューの上限: %d回\n", trail.ReviewLimit)
 			}
 		}
 	}

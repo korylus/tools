@@ -17,12 +17,47 @@ import (
 // defaultMaxReviewsは、延長していないタスクで行うレビューの上限の回数。
 const defaultMaxReviews = 3
 
-// reviewLimitは、このタスクについて人が延長した上限か、既定の上限を返す。
-func reviewLimit(rec *state.TaskRecord) int {
-	if rec.ReviewLimit > 0 {
-		return rec.ReviewLimit
+// reviewLimitは、レビューの記録trについて人が延長した上限か、既定の上限を返す。
+func reviewLimit(tr *state.ReviewTrail) int {
+	if tr.ReviewLimit > 0 {
+		return tr.ReviewLimit
 	}
 	return defaultMaxReviews
+}
+
+// reviewTrailは、状態stで進めているレビュー・修正・人への確認が対象にするレビューの記録を返す。
+// タスクのステップならタスクの記録の、作業報告書のレビューなら最新の回の記録を返し、
+// どちらでもなければnilを返す。
+func reviewTrail(st *state.State) *state.ReviewTrail {
+	if st.Task != "" {
+		if rec := st.TaskRecord(st.Task); rec != nil {
+			return &rec.ReviewTrail
+		}
+		return nil
+	}
+	if isReportReview(st) {
+		return &st.Reports[len(st.Reports)-1].ReviewTrail
+	}
+	return nil
+}
+
+// isReportReviewは、状態stが作業報告書のレビュー・修正・人への確認を進めているかを返す。
+// 作業報告書はタスクに属さないため、タスク番号を空にしたこれらのステップで見分ける。
+func isReportReview(st *state.State) bool {
+	if st.Task != "" || len(st.Reports) == 0 {
+		return false
+	}
+	switch st.Step {
+	case state.StepReview, state.StepFix, state.StepAsk:
+		return true
+	}
+	return false
+}
+
+// reportReviewPrefixは、計画書名nameの作業報告書のレビュードキュメントに使うレビュー接頭辞を返す。
+// 回をまたいで同じ接頭辞にし、前の回のレビューの修正検証の対象にする。
+func reportReviewPrefix(name string) string {
+	return name + "-report"
 }
 
 // reviewerForはn回目 (1始まり) のレビューを行う役割を返す。修正したモデルが同じ変更を
@@ -34,10 +69,9 @@ func reviewerFor(n int) state.Role {
 	return state.RoleReviewerClaude
 }
 
-// startReviewは状態stを、タスクの記録recの次のレビューのステップにする。最初のレビューでは
-// レビュー接頭辞を決める。始める時点の最新のレビュードキュメントを残し、それより新しい
-// 連番だけをこのステップのレビューとして受け付ける。
-func (f *Flow) startReview(ctx context.Context, st *state.State, rec *state.TaskRecord, now time.Time) error {
+// startTaskReviewは状態stを、タスクの記録recの最初のレビューのステップにする。
+// レビュー接頭辞は、最初のレビューを始めるときに決める。
+func (f *Flow) startTaskReview(ctx context.Context, st *state.State, rec *state.TaskRecord, now time.Time) error {
 	if rec.ReviewPrefix == "" {
 		root, err := branch.Toplevel(ctx, f.Root)
 		if err != nil {
@@ -51,18 +85,33 @@ func (f *Flow) startReview(ctx context.Context, st *state.State, rec *state.Task
 			rec.ReviewRepo = rec.Repo
 		}
 	}
-	before, _, err := review.Latest(f.Root, rec.ReviewPrefix)
+	return f.startReview(st, &rec.ReviewTrail, now)
+}
+
+// startReportReviewは状態stを、最新の回の作業報告書のレビューのステップにする。
+func (f *Flow) startReportReview(st *state.State, now time.Time) error {
+	tr := &st.Reports[len(st.Reports)-1].ReviewTrail
+	tr.ReviewPrefix = reportReviewPrefix(f.Name)
+	st.Task = ""
+	return f.startReview(st, tr, now)
+}
+
+// startReviewは状態stを、レビューの記録trの次のレビューのステップにする。レビュー接頭辞は
+// 決めてあること。始める時点の最新のレビュードキュメントを残し、それより新しい
+// 連番だけをこのステップのレビューとして受け付ける。
+func (f *Flow) startReview(st *state.State, tr *state.ReviewTrail, now time.Time) error {
+	before, _, err := review.Latest(f.Root, tr.ReviewPrefix)
 	if err != nil {
 		return err
 	}
-	setStep(st, state.StepReview, reviewerFor(len(rec.Reviews)+1), now)
+	setStep(st, state.StepReview, reviewerFor(len(tr.Reviews)+1), now)
 	st.ReviewBefore = before
 	return nil
 }
 
 // finishReviewは、レビューのステップの完了を確かめて記録し、次のステップを決める。
 // レビュードキュメントの不備はレビュアーが直せるため、受け付けずに理由を返す。
-func (f *Flow) finishReview(ctx context.Context, st *state.State, rec *state.TaskRecord, now time.Time) error {
+func (f *Flow) finishReview(st *state.State, rec *state.ReviewTrail, now time.Time) error {
 	doc, ok, err := review.Latest(f.Root, rec.ReviewPrefix)
 	if err != nil {
 		return err
@@ -102,18 +151,19 @@ func (f *Flow) finishReview(ctx context.Context, st *state.State, rec *state.Tas
 	rec.Reviews = append(rec.Reviews, state.ReviewRecord{Number: n, Role: role, Doc: doc, Verdict: string(d.Verdict), At: now})
 	limit := reviewLimit(rec)
 	if d.Verdict == review.RequestChanges && n >= limit {
+		next := "続けると、回答と修正のあと、再レビューせずに次のタスクへ進みます"
+		if isReportReview(st) {
+			next = "続けると、回答と修正のあと、再レビューせずに作業報告書のレビューを終えます"
+		}
 		setStep(st, state.StepAsk, role, now)
 		st.Ask = &state.Ask{
-			Kind:   state.AskReviewLimit,
-			Reason: fmt.Sprintf("レビューが上限の%d回に達しても Request Changes でした", limit),
-			Details: []string{
-				"レビュードキュメント: " + doc,
-				"続けると、回答と修正のあと、再レビューせずに次のタスクへ進みます",
-			},
+			Kind:    state.AskReviewLimit,
+			Reason:  fmt.Sprintf("レビューが上限の%d回に達しても Request Changes でした", limit),
+			Details: []string{"レビュードキュメント: " + doc, next},
 		}
 		return nil
 	}
-	return f.answer(ctx, st, rec, d, now)
+	return f.answer(st, rec, d, now)
 }
 
 // reviewSequenceは、レビュー接頭辞prefixのドキュメントのパスdocの連番を返す。
@@ -152,7 +202,7 @@ func checkedAsRecommended(fd review.Finding) bool {
 // 要人間判断の指摘か再検討提案に回答が無ければ、そのレビュアーが人に尋ねるステップにする。
 // 回答はレビュードキュメントに書き、状態を保存する前に書くため、保存に失敗して
 // やり直しても同じ回答になる。
-func (f *Flow) answer(ctx context.Context, st *state.State, rec *state.TaskRecord, d *review.Document, now time.Time) error {
+func (f *Flow) answer(st *state.State, rec *state.ReviewTrail, d *review.Document, now time.Time) error {
 	doc := rec.Reviews[len(rec.Reviews)-1].Doc
 	a := d.Answer()
 	if len(a.Invalid) > 0 {
@@ -189,21 +239,28 @@ func (f *Flow) answer(ctx context.Context, st *state.State, rec *state.TaskRecor
 		setStep(st, state.StepFix, role, now)
 		return nil
 	}
-	return f.afterFix(ctx, st, rec, now)
+	return f.afterFix(st, rec, now)
 }
 
-// afterFixは、修正を終えたか修正の要らない回答のあとに、再レビューするかタスクを終えるかを
+// afterFixは、修正を終えたか修正の要らない回答のあとに、再レビューするかレビューを終えるかを
 // 決める。最後のレビューがRequest Changesで上限に達していなければ、別の役割で再レビューする。
-func (f *Flow) afterFix(ctx context.Context, st *state.State, rec *state.TaskRecord, now time.Time) error {
+// 作業報告書のレビューを終えるときは、その回にレビューのステップの記録を含める。
+func (f *Flow) afterFix(st *state.State, rec *state.ReviewTrail, now time.Time) error {
 	last := rec.Reviews[len(rec.Reviews)-1]
 	if review.Verdict(last.Verdict) == review.RequestChanges && last.Number < reviewLimit(rec) {
-		return f.startReview(ctx, st, rec, now)
+		return f.startReview(st, rec, now)
+	}
+	if isReportReview(st) {
+		if err := f.coverReport(st); err != nil {
+			return err
+		}
 	}
 	clearStep(st)
 	return nil
 }
 
-// checkFixは修正の完了の条件を確かめる。
+// checkFixはタスクの修正の完了の条件を確かめる。作業報告書の修正は下書きを書き換えるだけで
+// コミットしないため、この条件を確かめない。
 func checkFix(ctx context.Context, rec *state.TaskRecord) error {
 	var reasons []string
 	cur, err := branch.Current(ctx, rec.Repo)

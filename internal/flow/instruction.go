@@ -51,6 +51,17 @@ type Instruction struct {
 	Branches []ReportBranch
 	// PreviousReportは、作業報告書の指示で、前の回までに書いた作業報告書のURL。無ければ空文字。
 	PreviousReport string
+	// ReportReviewは、作業報告書のレビュー・修正・人への確認の指示で、対象の作業報告書。
+	// タスクの指示ではnil。
+	ReportReview *ReportReview
+}
+
+// ReportReviewは、レビューする作業報告書。
+type ReportReview struct {
+	// URLは作業報告書のページのURL。
+	URL string
+	// Prefixは、レビュードキュメントの名前に使うレビュー接頭辞。
+	Prefix string
 }
 
 // Stringは指示を、役割のセッションが読む文面にする。コンテキストが圧縮されたあとでも
@@ -68,6 +79,9 @@ func (in Instruction) String() string {
 	if rec := in.Record; rec != nil {
 		fmt.Fprintf(&b, "repo: %s\ndir: %s\nbranch: %s\nbase: %s\n", rec.Repo, rec.Dir, rec.Branch, rec.Base)
 	}
+	if rr := in.ReportReview; rr != nil {
+		fmt.Fprintf(&b, "report: %s\n", rr.URL)
+	}
 	if in.ReviewNumber > 0 {
 		fmt.Fprintf(&b, "review: %d回目\n", in.ReviewNumber)
 	}
@@ -82,9 +96,17 @@ func (in Instruction) String() string {
 	case ActionWork:
 		in.writeWork(&b)
 	case ActionReview:
-		in.writeReview(&b)
+		if in.ReportReview != nil {
+			in.writeReportReview(&b)
+		} else {
+			in.writeReview(&b)
+		}
 	case ActionFix:
-		in.writeFix(&b)
+		if in.ReportReview != nil {
+			in.writeReportFix(&b)
+		} else {
+			in.writeFix(&b)
+		}
 	case ActionAsk:
 		in.writeAsk(&b)
 	case ActionReport:
@@ -154,6 +176,33 @@ func (in Instruction) writeFix(b *strings.Builder) {
 		fmt.Sprintf("%s で、修正を %s のブランチ %s にコミットする。docs/private 配下 (計画書・レビュードキュメントなど) はコミットしない", code("/korylus-commit repo="+rec.Repo), rec.Repo, rec.Branch),
 		fmt.Sprintf("%s を実行する", code(in.doneCommand())),
 		"done が受け付けられなかったら、理由を読んで直してから4をやり直す。直せなければ人に尋ねる",
+		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
+	}
+	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")
+	writeSteps(b, steps)
+}
+
+func (in Instruction) writeReportReview(b *strings.Builder) {
+	rr := in.ReportReview
+	command := fmt.Sprintf("/korylus-review-doc %s prefix=%s", rr.URL, rr.Prefix)
+	steps := []string{
+		fmt.Sprintf("%s を実行し、作業報告書 %s をレビューする。ブランチは切り替えない", code(command), rr.URL),
+		"レビュードキュメントの対応方針の選択肢にはチェックを入れない。回答はkorylusflowが区分と推奨をもとに行う",
+		fmt.Sprintf("%s を実行する", code(in.doneCommand())),
+		"done が受け付けられなかったら、理由を読んでレビュードキュメントを直してから3をやり直す。直せなければ人に尋ねる",
+		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
+	}
+	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")
+	writeSteps(b, steps)
+}
+
+func (in Instruction) writeReportFix(b *strings.Builder) {
+	rr := in.ReportReview
+	steps := []string{
+		fmt.Sprintf("レビュードキュメント %s で対応方針にチェックの入った指摘を、選ばれた方針どおりに、作業報告書 %s の下書きを書き換えて修正する。フィードバックの節には触れない。チェック・評価・総評は書き換えず、自分で再レビューしない", in.ReviewDoc, rr.URL),
+		"作業報告書は下書きで、コミットしない。ブランチも切り替えない",
+		fmt.Sprintf("%s を実行する", code(in.doneCommand())),
+		"done が受け付けられなかったら、理由を読んで直してから3をやり直す。直せなければ人に尋ねる",
 		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
 	}
 	b.WriteString("プロジェクトのルートで、次の順に作業する。\n\n")

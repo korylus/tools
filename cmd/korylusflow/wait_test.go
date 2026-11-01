@@ -116,5 +116,5 @@ func TestDoneReviewLimitFlag(t *testing.T) {
 	if code != exitRejected {
 		t.Fatalf("終了コード = %d、期待値 = %d (%s)", code, exitRejected, stderr.String())
 	}
-	assertContains(t, stderr.String(), "レビュー上限は、上限に達して人を待っているタスクでだけ")
+	assertContains(t, stderr.String(), "レビュー上限は、上限に達して人を待っているタスクか作業報告書でだけ")
 }

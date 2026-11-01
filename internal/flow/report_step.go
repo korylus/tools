@@ -44,6 +44,19 @@ func (f *Flow) recordReport(st *state.State, r state.ReportRound, now time.Time)
 	return nil
 }
 
+// coverReportは、最新の回の作業報告書に、これまでに記録したステップとまだ追記していない
+// このステップの記録を含める。作業報告書のレビューのステップを、次の回の作業報告書を書く
+// きっかけに数えないためである。完了の記録 (Pending) を残してから追記するため、
+// 途中で落ちて追記をやり直しても件数は変わらない。
+func (f *Flow) coverReport(st *state.State) error {
+	events, err := f.Dir.ReadEvents()
+	if err != nil {
+		return err
+	}
+	st.Reports[len(st.Reports)-1].Events = len(events) + 1
+	return nil
+}
+
 // reportBranchesは、「マージするPR」と同じまとめ方で、リポジトリごとの最後のタスクの
 // ブランチと、その先頭のコミットを返す。
 func (f *Flow) reportBranches(ctx context.Context, st *state.State) ([]ReportBranch, error) {

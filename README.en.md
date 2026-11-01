@@ -130,6 +130,16 @@ When the implementer did not write a walkthrough, they add the reason (`{"locati
 The URL must start with `https://`.
 `korylusflow` only records the URL and the reason; it neither reads the work report nor writes to Wikino.
 
+When the implementer wrote a walkthrough, the work report is then reviewed.
+
+1. A reviewer reviews it with `/korylus-review-doc <work report URL> prefix=<plan name>-report`; Codex does the first review, and later reviews are done by a different role than the previous one
+2. `korylusflow` answers the auto-fixable findings in the review document with the recommended options, and the reviewer fixes the work report draft; the draft is not committed, so completing the fix does not check the branch or commits
+3. On Request Changes go back to 1 (up to 3 reviews); on Comment or Approve the work report review ends
+
+Findings that need a human decision and the review limit are handled the same way as in task reviews.
+Review documents use the same prefix (`<plan name>-report`) with sequential numbers across rounds, so the next round verifies fixes from the previous round's reviews.
+When the implementer did not write a walkthrough, there is nothing to check against the code, so the review is skipped.
+
 Task prefixes are read as follows.
 
 | Prefix                                           | Working directory                                            |

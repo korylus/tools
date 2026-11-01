@@ -104,7 +104,7 @@ func TestFlowReviewExtensionRequiresLimitAsk(t *testing.T) {
 	fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
 	fx.wait(t, state.RoleImplementer)
 	_, err := fx.flow.DoneWithReviewLimit(context.Background(), state.RoleImplementer, strings.NewReader("[]"), 6)
-	assertRejected(t, err, "上限に達して人を待っているタスクでだけ")
+	assertRejected(t, err, "上限に達して人を待っているタスクか作業報告書でだけ")
 	if st := fx.load(t); st.Step != state.StepImplement || st.TaskRecord("1-1").ReviewLimit != 0 {
 		t.Fatalf("拒否したのに状態が変わりました: %+v", st)
 	}

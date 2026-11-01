@@ -124,13 +124,14 @@ func (fx fixture) approve(t *testing.T, id string) string {
 const testReportURL = "https://wikino.app/s/demo/pages/2"
 
 // writeReportは、計画書の最後で実装者に作業報告書の指示が来ることを確かめ、
-// 作業報告書のURLを渡して完了を記録する。Doneの文面を返す。
+// 作業報告書のURLと処理の流れを書かなかった理由を渡して完了を記録する。
+// 処理の流れを書かなかったため、作業報告書のレビューを挟まずに終える。Doneの文面を返す。
 func (fx fixture) writeReport(t *testing.T) string {
 	t.Helper()
 	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionReport {
 		t.Fatalf("指示 = %+v、作業報告書の指示を期待", in)
 	}
-	msg, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`"}`)
+	msg, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`","walkthrough_skipped":"テストのため"}`)
 	if err != nil {
 		t.Fatalf("作業報告書のDoneのエラー = %v", err)
 	}

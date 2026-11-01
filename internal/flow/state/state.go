@@ -108,6 +108,27 @@ func (s Step) Label() string {
 	return string(s)
 }
 
+// reportStepLabelsは、タスクに属さない (タスク番号が空の) ステップの表示名。
+// 作業報告書の作成と、作業報告書のレビュー・修正・人への確認がこれに当たる。
+var reportStepLabels = map[Step]string{
+	StepReport: "作業報告書の作成",
+	StepReview: "作業報告書のレビュー",
+	StepFix:    "作業報告書の修正",
+	StepAsk:    "作業報告書のレビューについての人への確認",
+}
+
+// Whereは、タスクtaskのステップstepを「タスク 1-1 のレビュー」「作業報告書のレビュー」の
+// 形で表す。タスク番号が空のステップは、作業報告書のステップとして表す。
+func Where(task string, step Step) string {
+	if task != "" {
+		return fmt.Sprintf("タスク %s の%s", task, step.Label())
+	}
+	if label, ok := reportStepLabels[step]; ok {
+		return label
+	}
+	return step.Label()
+}
+
 // Stateは1つの計画書の状態。
 type State struct {
 	// Taskは進めているタスク番号。進めているタスクが無いときと、タスクに属さない
@@ -175,24 +196,30 @@ type TaskRecord struct {
 	// Preparedはブランチを準備できたかどうか。準備できなかったタスクのブランチは
 	// 作られていないため、同じリポジトリの次のタスクのベースにしない。
 	Prepared bool `json:"prepared,omitempty"`
-	// ReviewPrefixは、/korylus-review がレビュードキュメントの名前に使うレビュー接頭辞。
-	// ReviewRepoは /korylus-review の repo= に渡すリポジトリで、本体なら空。
+	ReviewTrail
+	// Verificationは実装の完了で受け取った動作確認の項目。
+	Verification []VerificationItem `json:"verification,omitempty"`
+}
+
+// ReviewTrailは、タスクか作業報告書の1回について行ったレビューの記録。
+// JSONでは、埋め込んだ記録のフィールドとして平らに書く。
+type ReviewTrail struct {
+	// ReviewPrefixは、レビュードキュメントの名前に使うレビュー接頭辞。
+	// ReviewRepoは /korylus-review の repo= に渡すリポジトリで、本体と作業報告書なら空。
 	// どちらも最初のレビューを始めるときに決める。
 	ReviewPrefix string `json:"review_prefix,omitempty"`
 	ReviewRepo   string `json:"review_repo,omitempty"`
 	// Reviewsは行ったレビューを、行った順に並べたもの。
 	Reviews []ReviewRecord `json:"reviews,omitempty"`
-	// ReviewLimitは人が延長したこのタスクのレビュー上限。0なら既定の3回を使う。
+	// ReviewLimitは人が延長したレビュー上限。0なら既定の3回を使う。
 	ReviewLimit int `json:"review_limit,omitempty"`
-	// Deferredは、コードを変えない選択肢 (後続タスクに積む・現状維持など) で回答した指摘。
+	// Deferredは、変更しない選択肢 (後続タスクに積む・現状維持など) で回答した指摘。
 	Deferred []DeferredFinding `json:"deferred,omitempty"`
-	// Verificationは実装の完了で受け取った動作確認の項目。
-	Verification []VerificationItem `json:"verification,omitempty"`
 }
 
 // ReviewRecordはレビュー1回の記録。
 type ReviewRecord struct {
-	// Numberはそのタスクで何回目のレビューか (1始まり)。
+	// Numberはそのタスクか作業報告書の回で何回目のレビューか (1始まり)。
 	Number int  `json:"number"`
 	Role   Role `json:"role"`
 	// Docはレビュードキュメントの、プロジェクトのルートからの相対パス。
@@ -222,7 +249,7 @@ type VerificationItem struct {
 }
 
 // ReportRoundは作業報告書1回分の記録。korylusflowは作業報告書の本文を読まず、
-// 場所と処理の流れを書かなかった理由だけを持つ。
+// 場所と処理の流れを書かなかった理由と、作業報告書のレビューの記録だけを持つ。
 type ReportRound struct {
 	// Numberは何回目の作業報告書か (1始まり)。
 	Number int `json:"number"`
@@ -235,6 +262,8 @@ type ReportRound struct {
 	Location string `json:"location,omitempty"`
 	// WalkthroughSkippedは、作業報告書に処理の流れを書かなかった理由。書いたときは空。
 	WalkthroughSkipped string `json:"walkthrough_skipped,omitempty"`
+	// ReviewTrailは作業報告書のレビューの記録。処理の流れを書かなかった回はレビューしない。
+	ReviewTrail
 }
 
 // LatestReportは、最新の回の作業報告書のURLを返す。まだ書いていないか、最新の回が

@@ -47,10 +47,12 @@ func newInput(t *testing.T, src string) Input {
 	}
 	st := &state.State{Tasks: []state.TaskRecord{{
 		ID: "1-1", Repo: "/repo", Dir: "/repo/go", Branch: "demo-1-1", Base: "develop", Prepared: true,
-		Reviews: []state.ReviewRecord{
-			{Number: 1, Role: state.RoleReviewerCodex, Doc: "docs/private/reviews/demo-1-1-001.md", Verdict: "Comment"},
+		ReviewTrail: state.ReviewTrail{
+			Reviews: []state.ReviewRecord{
+				{Number: 1, Role: state.RoleReviewerCodex, Doc: "docs/private/reviews/demo-1-1-001.md", Verdict: "Comment"},
+			},
+			Deferred: []state.DeferredFinding{{Doc: "docs/private/reviews/demo-1-1-001.md", Title: "名前|を改める", Choice: "後続タスクに積む (推奨)"}},
 		},
-		Deferred: []state.DeferredFinding{{Doc: "docs/private/reviews/demo-1-1-001.md", Title: "名前|を改める", Choice: "後続タスクに積む (推奨)"}},
 		Verification: []state.VerificationItem{
 			{Kind: "process", Title: "statusを表示できる", Target: "korylusflow status demo.md", Steps: []string{"実行する"}, Expected: "一覧が出る"},
 			{Kind: "screen", Title: "画面を開ける", Target: "/settings", Steps: []string{"ログインする", "開く"}, Expected: "表示される"},

@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -81,8 +82,12 @@ func TestFlowReport(t *testing.T) {
 	if msg, err = fx.done(state.RoleImplementer, `{"location":"`+first+`"}`); err != nil {
 		t.Fatalf("作業報告書のDoneのエラー = %v", err)
 	}
-	if !strings.Contains(msg, "作業報告書: "+first) {
+	// 処理の流れを書いたため、作業報告書のレビューを挟む。
+	if !strings.Contains(msg, "次は作業報告書のレビューで、reviewer-codex の番です") {
 		t.Errorf("Done() = %q", msg)
+	}
+	if msg := fx.approveReport(t, state.RoleReviewerCodex, first, 1); !strings.Contains(msg, "作業報告書: "+first) {
+		t.Errorf("作業報告書のレビューのDone() = %q", msg)
 	}
 	if out := fx.facts(t); !strings.Contains(out, "- 作業報告書: 1回目 "+first+"\n") {
 		t.Errorf("事実に作業報告書のURLが無い:\n%s", out)
@@ -122,8 +127,12 @@ func TestFlowReport(t *testing.T) {
 		!strings.Contains(in.String(), "前の回の作業報告書: "+first+"\n") {
 		t.Fatalf("指示 = %+v、demo-fb1-1で前の回の作業報告書を更新する指示を期待\n%s", in, in.String())
 	}
-	if msg, err := fx.done(state.RoleImplementer, `{"location":"`+first+`"}`); err != nil || !strings.Contains(msg, first) {
-		t.Errorf("作業報告書のDone() = %q, %v", msg, err)
+	if _, err := fx.done(state.RoleImplementer, `{"location":"`+first+`"}`); err != nil {
+		t.Fatalf("作業報告書のDoneのエラー = %v", err)
+	}
+	// 回をまたいで同じレビュー接頭辞を使い、連番を進める。レビュアーは回ごとにCodexから始める。
+	if msg := fx.approveReport(t, state.RoleReviewerCodex, first, 2); !strings.Contains(msg, first) {
+		t.Errorf("作業報告書のレビューのDone() = %q", msg)
 	}
 
 	st, err := fx.flow.Dir.Load()
@@ -135,12 +144,35 @@ func TestFlowReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(st.Reports) != 2 || st.Reports[0].Number != 1 || st.Reports[1].Number != 2 ||
-		st.Reports[1].Location != first || st.Reports[1].Events != len(events) {
+		st.Reports[1].Location != first || st.Reports[1].Events != len(events) ||
+		len(st.Reports[1].Reviews) != 1 || st.Reports[1].Reviews[0].Doc != "docs/private/reviews/demo-report-002.md" {
 		t.Errorf("作業報告書の記録 = %+v、所要時間の記録 = %d件", st.Reports, len(events))
 	}
 	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionFinish {
 		t.Errorf("指示 = %+v、終了を期待", in)
 	}
+}
+
+// approveReportは、作業報告書urlのレビューの指示が役割roleに来ることを確かめ、
+// 連番nのレビュードキュメントをApproveで書いて完了を記録する。Doneの文面を返す。
+func (fx fixture) approveReport(t *testing.T, role state.Role, url string, n int) string {
+	t.Helper()
+	in := fx.wait(t, role)
+	if in.Action != ActionReview || in.Task != "" || in.Record != nil || in.ReportReview == nil ||
+		*in.ReportReview != (ReportReview{URL: url, Prefix: "demo-report"}) {
+		t.Fatalf("指示 = %+v、作業報告書 %s のレビューを期待", in, url)
+	}
+	for _, want := range []string{"action: review\n", "report: " + url + "\n", "`/korylus-review-doc " + url + " prefix=demo-report`"} {
+		if !strings.Contains(in.String(), want) {
+			t.Errorf("指示に %q が無い:\n%s", want, in.String())
+		}
+	}
+	writeFile(t, fx.flow.Root, fmt.Sprintf("docs/private/reviews/demo-report-%03d.md", n), reviewDoc("Approve", ""))
+	msg, err := fx.done(role, "")
+	if err != nil {
+		t.Fatalf("作業報告書のレビューのDoneのエラー = %v", err)
+	}
+	return msg
 }
 
 func TestFlowReportBeforeStart(t *testing.T) {

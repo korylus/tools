@@ -104,7 +104,7 @@ func TestStatusWaitingForHuman(t *testing.T) {
 		Ask:   &state.Ask{Reason: "要人間判断の指摘があります", Details: []string{"internal/plan/plan.go の命名"}},
 		Tasks: []state.TaskRecord{{
 			ID: "2-1", Repo: "/korylus-tools", Dir: "/korylus-tools", Branch: "korylusflow-2-1", Base: "main",
-			Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}},
+			ReviewTrail: state.ReviewTrail{Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}}},
 		}},
 	}
 	if err := dir.Save(st, now); err != nil {
@@ -258,6 +258,33 @@ func TestStatusReport(t *testing.T) {
 			name: "処理の流れを書かなかった作業報告書",
 			st:   &state.State{Reports: []state.ReportRound{{Number: 2, Location: "https://wikino.app/s/demo/pages/2", WalkthroughSkipped: "文面だけのため"}}},
 			want: "作業報告書: 2回目 (https://wikino.app/s/demo/pages/2、処理の流れは書いていません: 文面だけのため)\n",
+		},
+		{
+			name: "作業報告書をレビューしている",
+			st: &state.State{
+				Step: state.StepReview, Role: state.RoleReviewerClaude, Since: now.Add(-time.Minute),
+				Reports: []state.ReportRound{{
+					Number: 1, Location: "https://wikino.app/s/demo/pages/2",
+					ReviewTrail: state.ReviewTrail{Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}}},
+				}},
+			},
+			want: "状態: 作業報告書のレビュー\n番の役割: レビュアー (Claude Code) (reviewer-claude)\n",
+		},
+		{
+			name: "作業報告書のレビューの回数を表示する",
+			st: &state.State{
+				Step: state.StepFix, Role: state.RoleReviewerCodex, Since: now.Add(-time.Minute),
+				Reports: []state.ReportRound{{
+					Number: 1, Location: "https://wikino.app/s/demo/pages/2",
+					ReviewTrail: state.ReviewTrail{Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}}},
+				}},
+			},
+			want: "レビュー: 1回 (最新の評価: Request Changes)\n",
+		},
+		{
+			name: "作業報告書のレビューの完了を記録している",
+			st:   &state.State{Pending: &state.Event{Step: state.StepReview, Role: state.RoleReviewerCodex, Started: now.Add(-time.Minute), Ended: now}},
+			want: "状態: 作業報告書のレビューの完了を記録中 (waitかdoneで再開できます)\n",
 		},
 		{
 			name: "Markdownの作業報告書だった回",
