@@ -1,9 +1,8 @@
-// Package reportは、計画書の最後まで進んだときに作る作業報告書をMarkdownで組み立てる。
+// Package reportは、マージするPRなど、計画書を進めた結果の事実をMarkdownで組み立てる。
 //
-// 作業報告書には、状態・所要時間の記録・計画書・gitから集めた事実だけを並べ、
-// 文章をLLMに新たに書かせない。事実と異なる要約が混ざって、人の確認を誤らせないためである。
-// 人は動作確認チェックリストの項目ごとにOK / NGとコメントを書き込み、次の版は
-// その結果 (ParseResults) をもとに項目を並べ替える。
+// 状態・所要時間の記録・計画書・gitから集めた事実だけを並べ、エージェントの説明を混ぜない。
+// 事実と異なる要約が混ざって、人の確認を誤らせないためである。処理の流れなどの説明は、
+// 実装者がWikinoの作業報告書に書く。作業報告書の本文は読まず、そのURLだけを載せる。
 package report
 
 import (
@@ -29,30 +28,19 @@ const constraintsSection = "合意済みの設計制約"
 // partOrderは想定行数の内訳を並べる順序。
 var partOrder = []string{"実装", "テスト"}
 
-// Inputは作業報告書1版を組み立てる入力。
+// Inputは計画書を進めた結果の事実を組み立てる入力。
 type Input struct {
 	// PlanURLは計画書の指定 (WikinoのページのURL)。
 	PlanURL string
 	// Nameは計画書名。見出しに使う。
 	Name string
 	// Planは計画書を読み取ったもの。
-	Plan    *plan.Plan
-	Version int
-	Now     time.Time
-	State   *state.State
-	// Eventsは所要時間の記録で、Since番目以降がこの版の期間の記録。
+	Plan  *plan.Plan
+	State *state.State
+	// Eventsは所要時間の記録。
 	Events []state.Event
-	Since  int
 	// Changesはタスク番号ごとの、元のブランチからタスクのブランチまでの変更。
 	Changes map[string]Changes
-	// Previousは前の版に書き込まれた動作確認の結果。第1版ではnil。
-	Previous *Results
-	// Currentは、同じ版を作り直すときに、その版に書き込まれていた結果。
-	// 人の書き込みを消さないよう引き継ぐ。新しい版ではnil。
-	Current *Results
-	// Walkthroughは、この版を作る前に書いた処理の流れの場所か書かなかった理由。
-	// 処理の流れのステップを足す前に作った版ではnil。本文は読まず、場所だけを載せる。
-	Walkthrough *state.Walkthrough
 }
 
 // Changesはタスク1件のブランチの変更。
@@ -64,20 +52,18 @@ type Changes struct {
 	Err string
 }
 
-// builderは作業報告書1版を書き出す作業領域。
+// builderは事実を書き出す作業領域。
 type builder struct {
 	strings.Builder
 	in    Input
 	tasks map[string]plan.Task
-	// recordsは作業報告書に載せるタスク (ブランチを準備し、実装を終えたもの) の記録。
+	// recordsは載せるタスク (ブランチを準備し、実装を終えたもの) の記録。
 	records []state.TaskRecord
-	// addedは、この版の期間に記録したステップがあるタスク。
-	added map[string]bool
 	// worksは、実装者がブランチを作らずに行ったタスク ([implementer]) の番号を、進めた順に並べたもの。
 	works []string
 }
 
-// Buildは作業報告書1版をMarkdownで組み立てる。
+// Buildは事実をMarkdownで組み立てる。
 func Build(in Input) []byte {
 	b := newBuilder(in)
 	b.overview()
@@ -85,19 +71,13 @@ func Build(in Input) []byte {
 	b.implementerTasks()
 	b.deferred()
 	b.protected()
-	b.checklist()
 	return []byte(b.String())
 }
 
 func newBuilder(in Input) *builder {
-	b := &builder{in: in, tasks: map[string]plan.Task{}, added: map[string]bool{}}
+	b := &builder{in: in, tasks: map[string]plan.Task{}}
 	for _, t := range in.Plan.Tasks {
 		b.tasks[t.ID] = t
-	}
-	for i, e := range in.Events {
-		if i >= in.Since {
-			b.added[e.Task] = true
-		}
 	}
 	b.records = reported(in.State, in.Events)
 	// 実装のステップを記録したのに記録を持たないタスクは、ブランチを作らずに行ったタスク。
@@ -115,21 +95,12 @@ func (b *builder) f(format string, args ...any) {
 
 func (b *builder) overview() {
 	in := b.in
-	b.f("# 作業報告書 第%d版: %s\n\n## 概要\n\n", in.Version, in.Name)
-	b.f("- 計画書: %s\n- 作成: %s\n", code(in.PlanURL), in.Now.Format(timeLayout))
+	b.f("# 計画書の事実: %s\n\n## 概要\n\n", in.Name)
+	b.f("- 計画書: %s\n", code(in.PlanURL))
 	if len(in.Events) > 0 {
 		b.f("- 計画書の開始: %s\n", earliest(in.Events).Format(timeLayout))
 	}
-	if in.Since < len(in.Events) {
-		b.f("- この版の期間: %s 〜 %s\n", earliest(in.Events[in.Since:]).Format(timeLayout), in.Now.Format(timeLayout))
-	}
-	if p := in.Previous; p != nil {
-		b.f("- 前の版: 第%d版\n", in.Version-1)
-	}
-	b.f("- 処理の流れ: %s\n", walkthrough(in.Walkthrough))
-	if p := in.Previous; p != nil && p.Comment != "" {
-		b.f("\n前の版の全体へのコメント:\n\n%s\n", quote(p.Comment))
-	}
+	b.f("- 作業報告書: %s\n", reportLocation(in.State))
 
 	b.f("\n### マージするPR\n\n")
 	if len(b.records) == 0 {
@@ -165,13 +136,13 @@ type Chain struct {
 	Split bool
 }
 
-// Chainsは、作業報告書に載せるタスクを、作業報告書の「マージするPR」と同じ並びにまとめる。
-// 処理の流れのステップの指示に、リポジトリごとの最後のタスクのブランチを書くのに使う。
+// Chainsは、載せるタスクを、「マージするPR」と同じ並びにまとめる。
+// 作業報告書のステップの指示に、リポジトリごとの最後のタスクのブランチを書くのに使う。
 func Chains(st *state.State, events []state.Event) []Chain {
 	return chains(reported(st, events))
 }
 
-// reportedは、作業報告書に載せるタスク (ブランチを準備し、実装を終えたもの) の記録を返す。
+// reportedは、載せるタスク (ブランチを準備し、実装を終えたもの) の記録を返す。
 func reported(st *state.State, events []state.Event) []state.TaskRecord {
 	implemented := map[string]bool{}
 	for _, e := range events {
@@ -215,18 +186,22 @@ func chains(records []state.TaskRecord) []Chain {
 	return result
 }
 
-// walkthroughは、処理の流れの場所か書かなかった理由を、概要の1行に入れる形で表す。
-// URLはそのまま開けるようにし、パスはインラインコードにする。
-func walkthrough(w *state.Walkthrough) string {
-	switch {
-	case w == nil:
-		return "記録なし"
-	case w.Skipped != "":
-		return "書いていません (" + cell(w.Skipped) + ")"
-	case strings.HasPrefix(w.Location, "https://"):
-		return cell(w.Location)
+// reportLocationは、最新の回の作業報告書を概要の1行に入れる形で表す。
+// URLはそのまま開けるようにし、処理の流れを書かなかった回はその理由を添える。
+func reportLocation(st *state.State) string {
+	n := len(st.Reports)
+	if n == 0 {
+		return "まだ書いていません"
 	}
-	return code(w.Location)
+	r := st.Reports[n-1]
+	if r.Location == "" {
+		return fmt.Sprintf("%d回目 (Markdownの作業報告書で、ページはありません)", r.Number)
+	}
+	s := fmt.Sprintf("%d回目 %s", r.Number, cell(r.Location))
+	if r.WalkthroughSkipped != "" {
+		s += " (処理の流れは書いていません: " + cell(r.WalkthroughSkipped) + ")"
+	}
+	return s
 }
 
 func (b *builder) taskChanges() {
@@ -240,9 +215,6 @@ func (b *builder) taskChanges() {
 	for _, rec := range b.records {
 		t := b.tasks[rec.ID]
 		label := taskLabel(rec.ID, t)
-		if b.in.Version > 1 && b.added[rec.ID] {
-			label += " (この版で進めたタスク)"
-		}
 		b.f("| %s | %s (元: %s) | %s | %s | %s |\n",
 			cell(label), code(rec.Branch), code(rec.Base), changedLines(b.in.Changes[rec.ID]), cell(expected(t.Lines)), reviewVerdicts(rec.Reviews))
 	}
@@ -288,11 +260,7 @@ func (b *builder) implementerTasks() {
 	}
 	b.f("ブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n")
 	for _, id := range b.works {
-		b.f("- %s", cell(taskLabel(id, b.tasks[id])))
-		if b.in.Version > 1 && b.added[id] {
-			b.f(" (この版で進めたタスク)")
-		}
-		b.f("\n")
+		b.f("- %s\n", cell(taskLabel(id, b.tasks[id])))
 	}
 	b.f("\n")
 }
@@ -302,15 +270,20 @@ func (b *builder) deferred() {
 	var rows []string
 	for _, rec := range b.records {
 		for _, d := range rec.Deferred {
-			rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s |\n", rec.ID, cell(d.Title), cell(d.Choice), code(d.Doc)))
+			rows = append(rows, fmt.Sprintf("| タスク %s | %s | %s | %s |\n", rec.ID, cell(d.Title), cell(d.Choice), code(d.Doc)))
+		}
+	}
+	for _, r := range b.in.State.Reports {
+		for _, d := range r.Deferred {
+			rows = append(rows, fmt.Sprintf("| 作業報告書 (%d回目) | %s | %s | %s |\n", r.Number, cell(d.Title), cell(d.Choice), code(d.Doc)))
 		}
 	}
 	if len(rows) == 0 {
 		b.f("なし\n\n")
 		return
 	}
-	b.f("コードを変更しない方針を選んだ指摘です。\n後続のタスクにするかは人が決めます。\n\n")
-	b.f("| タスク | 指摘 | 選んだ対応方針 | レビュードキュメント |\n| --- | --- | --- | --- |\n%s\n", strings.Join(rows, ""))
+	b.f("変更しない方針を選んだ指摘です。\n後続のタスクにするかは人が決めます。\n\n")
+	b.f("| 対象 | 指摘 | 選んだ対応方針 | レビュードキュメント |\n| --- | --- | --- | --- |\n%s\n", strings.Join(rows, ""))
 }
 
 func (b *builder) protected() {
@@ -437,9 +410,4 @@ func code(s string) string {
 		return fence + " " + cell(s) + " " + fence
 	}
 	return fence + cell(s) + fence
-}
-
-// quoteは複数行の文字列をMarkdownの引用にする。
-func quote(s string) string {
-	return "> " + strings.ReplaceAll(s, "\n", "\n> ")
 }

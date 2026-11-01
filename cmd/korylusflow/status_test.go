@@ -104,7 +104,7 @@ func TestStatusWaitingForHuman(t *testing.T) {
 		Ask:   &state.Ask{Reason: "要人間判断の指摘があります", Details: []string{"internal/plan/plan.go の命名"}},
 		Tasks: []state.TaskRecord{{
 			ID: "2-1", Repo: "/korylus-tools", Dir: "/korylus-tools", Branch: "korylusflow-2-1", Base: "main",
-			Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}},
+			ReviewTrail: state.ReviewTrail{Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}}},
 		}},
 	}
 	if err := dir.Save(st, now); err != nil {
@@ -230,7 +230,7 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
-func TestStatusWalkthrough(t *testing.T) {
+func TestStatusReport(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
@@ -240,14 +240,56 @@ func TestStatusWalkthrough(t *testing.T) {
 		want string
 	}{
 		{
-			name: "処理の流れを書いている",
-			st:   &state.State{Step: state.StepWalkthrough, Role: state.RoleImplementer, Since: now.Add(-time.Minute)},
-			want: "状態: 作業報告書を作る前に、処理の流れを書いています\n番の役割: 実装者 (implementer)\n",
+			name: "作業報告書を書いている",
+			st:   &state.State{Step: state.StepReport, Role: state.RoleImplementer, Since: now.Add(-time.Minute)},
+			want: "状態: 計画書の最後まで進み、作業報告書を書いています\n番の役割: 実装者 (implementer)\n",
 		},
 		{
-			name: "処理の流れの完了を記録している",
-			st:   &state.State{Pending: &state.Event{Step: state.StepWalkthrough, Role: state.RoleImplementer, Started: now.Add(-time.Minute), Ended: now}},
+			name: "作業報告書の完了を記録している",
+			st:   &state.State{Pending: &state.Event{Step: state.StepReport, Role: state.RoleImplementer, Started: now.Add(-time.Minute), Ended: now}},
+			want: "状態: 作業報告書の作成の完了を記録中 (waitかdoneで再開できます)\n",
+		},
+		{
+			name: "以前の形式の処理の流れの完了を記録している",
+			st:   &state.State{Pending: &state.Event{Step: state.Step("walkthrough"), Role: state.RoleImplementer, Started: now.Add(-time.Minute), Ended: now}},
 			want: "状態: 処理の流れの作成の完了を記録中 (waitかdoneで再開できます)\n",
+		},
+		{
+			name: "処理の流れを書かなかった作業報告書",
+			st:   &state.State{Reports: []state.ReportRound{{Number: 2, Location: "https://wikino.app/s/demo/pages/2", WalkthroughSkipped: "文面だけのため"}}},
+			want: "作業報告書: 2回目 (https://wikino.app/s/demo/pages/2、処理の流れは書いていません: 文面だけのため)\n",
+		},
+		{
+			name: "作業報告書をレビューしている",
+			st: &state.State{
+				Step: state.StepReview, Role: state.RoleReviewerClaude, Since: now.Add(-time.Minute),
+				Reports: []state.ReportRound{{
+					Number: 1, Location: "https://wikino.app/s/demo/pages/2",
+					ReviewTrail: state.ReviewTrail{Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}}},
+				}},
+			},
+			want: "状態: 作業報告書のレビュー\n番の役割: レビュアー (Claude Code) (reviewer-claude)\n",
+		},
+		{
+			name: "作業報告書のレビューの回数を表示する",
+			st: &state.State{
+				Step: state.StepFix, Role: state.RoleReviewerCodex, Since: now.Add(-time.Minute),
+				Reports: []state.ReportRound{{
+					Number: 1, Location: "https://wikino.app/s/demo/pages/2",
+					ReviewTrail: state.ReviewTrail{Reviews: []state.ReviewRecord{{Number: 1, Role: state.RoleReviewerCodex, Verdict: "Request Changes"}}},
+				}},
+			},
+			want: "レビュー: 1回 (最新の評価: Request Changes)\n",
+		},
+		{
+			name: "作業報告書のレビューの完了を記録している",
+			st:   &state.State{Pending: &state.Event{Step: state.StepReview, Role: state.RoleReviewerCodex, Started: now.Add(-time.Minute), Ended: now}},
+			want: "状態: 作業報告書のレビューの完了を記録中 (waitかdoneで再開できます)\n",
+		},
+		{
+			name: "Markdownの作業報告書だった回",
+			st:   &state.State{Reports: []state.ReportRound{{Number: 1}}},
+			want: "作業報告書: 1回目 (Markdownの作業報告書で、ページはありません)\n",
 		},
 	}
 	for _, tt := range tests {
@@ -264,8 +306,8 @@ func TestStatusWalkthrough(t *testing.T) {
 				t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 			}
 			assertContains(t, stdout.String(), tt.want)
-			if strings.Contains(stdout.String(), "進めているタスクなし") || strings.Contains(stdout.String(), "タスク  の") {
-				t.Errorf("処理の流れのステップを、タスクのステップとして表示した:\n%s", stdout.String())
+			if strings.Contains(stdout.String(), "タスク  の") {
+				t.Errorf("作業報告書のステップを、タスクのステップとして表示した:\n%s", stdout.String())
 			}
 		})
 	}

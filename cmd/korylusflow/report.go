@@ -15,7 +15,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	return report(context.Background(), args, state.Root, source.Parse, stdout, stderr)
 }
 
-// reportは作業報告書の最新の版を作り直す。
+// reportは、マージするPRなど、状態・計画書・gitから集めた事実を標準出力に表示する。
 func report(ctx context.Context, args []string, stateRoot string, parse parseSource, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("report", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -32,11 +32,14 @@ func report(ctx context.Context, args []string, stateRoot string, parse parseSou
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError
 	}
-	path, err := f.Report(ctx)
+	out, err := f.Report(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError
 	}
-	fmt.Fprintf(stdout, "作業報告書を書きました: %s\n", path)
+	if _, err := stdout.Write(out); err != nil {
+		fmt.Fprintf(stderr, "エラー: %v\n", err)
+		return exitError
+	}
 	return exitOK
 }

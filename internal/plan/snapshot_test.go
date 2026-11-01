@@ -173,7 +173,7 @@ func appendTasks(src, added string) string {
 func TestCheckFeedbackPhase(t *testing.T) {
 	t.Parallel()
 
-	fb11 := "- [ ] **fb1-1**: [Go] 一覧の表示を直す\n  - **対応する確認項目**: 第1版 #2"
+	fb11 := "- [ ] **fb1-1**: [Go] 一覧の表示を直す\n  - **対応するフィードバック**: 1回目「一覧が崩れる」"
 	fb12 := "- [ ] **fb1-2**: [Go] 列を足す\n  - **保護領域**: schema (postsに列を追加)"
 	tests := []struct {
 		name      string
@@ -292,7 +292,7 @@ func TestCheckFeedbackPhase_ExtendsExistingTask(t *testing.T) {
 	for _, extra := range []string{
 		"  - **保護領域**: schema (列を追加)",
 		"  - **想定行数**: 約9999行 (実装9999行)",
-		"  - **対応する確認項目**: 第1版 #1",
+		"  - **対応するフィードバック**: 1回目「修正」",
 		"  - 元タスクの説明を追加する",
 	} {
 		t.Run(extra, func(t *testing.T) {

@@ -39,7 +39,7 @@ const samplePlan = "# 例の作業計画書\n" +
 	"\n" +
 	"- [X] **fb1-1**: [Rails] 保存後に編集画面へ戻す\n" +
 	"  - **想定行数**: 約30行\n" +
-	"  - **対応する確認項目**: 第1版 #2 「保存できる」、第1版 #5 「戻る」\n" +
+	"  - **対応するフィードバック**: 1回目「保存できない」\n" +
 	"\n" +
 	"## 恒久判断記録への反映\n" +
 	"\n" +
@@ -78,7 +78,6 @@ func TestParse(t *testing.T) {
 			Platform: "Rails",
 			Title:    "保存後に編集画面へ戻す",
 			Lines:    Size{Total: 30, Parts: map[string]int{}},
-			Verifies: []ItemRef{{Version: 1, Number: 2}, {Version: 1, Number: 5}},
 			LineNo:   30,
 		},
 	}

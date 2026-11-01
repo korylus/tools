@@ -29,13 +29,15 @@ func TestDirSaveLoad(t *testing.T) {
 		Pending: &Event{Task: "2-1", Step: StepImplement, Role: RoleImplementer, Started: now.Add(-2 * time.Hour), Ended: now.Add(-time.Hour)},
 		Ask:     &Ask{Reason: "要人間判断の指摘があります", Details: []string{"internal/flow/state/state.go"}},
 		Tasks: []TaskRecord{{
-			ID:          "2-2",
-			Repo:        "/korylus-tools",
-			Dir:         "/korylus-tools",
-			Branch:      "korylusflow-2-2",
-			Base:        "korylusflow-2-1",
-			ReviewLimit: 6,
-			Reviews:     []ReviewRecord{{Number: 1, Role: RoleReviewerCodex, Doc: "docs/private/reviews/a-001.md", Verdict: "Request Changes", At: now}},
+			ID:     "2-2",
+			Repo:   "/korylus-tools",
+			Dir:    "/korylus-tools",
+			Branch: "korylusflow-2-2",
+			Base:   "korylusflow-2-1",
+			ReviewTrail: ReviewTrail{
+				ReviewLimit: 6,
+				Reviews:     []ReviewRecord{{Number: 1, Role: RoleReviewerCodex, Doc: "docs/private/reviews/a-001.md", Verdict: "Request Changes", At: now}},
+			},
 			Verification: []VerificationItem{{
 				Kind: "process", Title: "statusで進行状況を表示できる", Target: "korylusflow status x.md",
 				Steps: []string{"実行する"}, Expected: "タスクの一覧が出る",
@@ -177,6 +179,55 @@ func TestStateTaskRecord(t *testing.T) {
 	}
 	if s.TaskRecord("2-1") != nil {
 		t.Error("扱っていないタスクでnilを期待した")
+	}
+}
+
+func TestStateReviewTrail(t *testing.T) {
+	t.Parallel()
+
+	tasks := []TaskRecord{{ID: "1-1", ReviewTrail: ReviewTrail{ReviewPrefix: "task"}}}
+	reports := []ReportRound{
+		{Number: 1, ReviewTrail: ReviewTrail{ReviewPrefix: "round-1"}},
+		{Number: 2, ReviewTrail: ReviewTrail{ReviewPrefix: "round-2"}},
+	}
+	tests := []struct {
+		name string
+		st   State
+		// wantは対象のレビューの記録のレビュー接頭辞。記録が無いときは空文字。
+		want       string
+		wantReport bool
+	}{
+		{name: "タスクのレビュー", st: State{Task: "1-1", Step: StepReview, Tasks: tasks, Reports: reports}, want: "task"},
+		{name: "記録の無いタスク", st: State{Task: "1-2", Step: StepReview, Tasks: tasks, Reports: reports}},
+		{name: "作業報告書のレビュー", st: State{Step: StepReview, Tasks: tasks, Reports: reports}, want: "round-2", wantReport: true},
+		{name: "作業報告書の修正", st: State{Step: StepFix, Reports: reports}, want: "round-2", wantReport: true},
+		{name: "作業報告書のレビューについての人への確認", st: State{Step: StepAsk, Reports: reports}, want: "round-2", wantReport: true},
+		{name: "作業報告書の作成", st: State{Step: StepReport, Reports: reports}},
+		{name: "作業報告書の無いレビュー", st: State{Step: StepReview}},
+		{name: "進めているステップなし", st: State{Reports: reports}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.st.IsReportReview(); got != tt.wantReport {
+				t.Errorf("IsReportReview() = %v、期待値 = %v", got, tt.wantReport)
+			}
+			got := tt.st.ReviewTrail()
+			if tt.want == "" {
+				if got != nil {
+					t.Errorf("ReviewTrail() = %+v、nilを期待", got)
+				}
+				return
+			}
+			if got == nil || got.ReviewPrefix != tt.want {
+				t.Fatalf("ReviewTrail() = %+v、レビュー接頭辞 %q の記録を期待", got, tt.want)
+			}
+			// 返した記録への変更が状態に反映されること。
+			got.ReviewLimit = 6
+			if tt.st.ReviewTrail().ReviewLimit != 6 {
+				t.Error("返した記録への変更が状態に反映されない")
+			}
+		})
 	}
 }
 

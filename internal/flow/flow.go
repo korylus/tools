@@ -3,8 +3,8 @@
 // 役割のセッションはWaitで自分の番を待って指示を受け取り、指示どおりに作業してから
 // Doneで完了を記録する。次のステップと番の役割はDoneとWaitが決め、エージェントには
 // 決めさせない。状態の読み取りから次のステップの判定・ブランチの準備・書き込みまでは、
-// 1つのファイルロックの中で行う。計画書の最後まで進んだら、実装者に処理の流れを
-// 書かせてから、作業報告書を作る。
+// 1つのファイルロックの中で行う。計画書の最後まで進んだら、実装者にWikinoの
+// 作業報告書を書かせ、そのURLを記録する。
 package flow
 
 import (
@@ -149,7 +149,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 			return Instruction{}, false, err
 		}
 		if st.Step == "" {
-			if err := f.finishPlan(ctx, st, p); err != nil {
+			if err := f.finishPlan(st); err != nil {
 				return Instruction{}, false, err
 			}
 		}
@@ -159,7 +159,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	}
 
 	if st.Step == "" {
-		return Instruction{Action: ActionFinish, Role: role, PlanURL: f.PlanURL, Report: f.latestReport(st)}, true, nil
+		return Instruction{Action: ActionFinish, Role: role, PlanURL: f.PlanURL, Report: st.LatestReport()}, true, nil
 	}
 	if st.Role != role {
 		return Instruction{}, false, nil
@@ -168,9 +168,13 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	if t, ok := findTask(p, st.Task); ok {
 		in.Title = t.Title
 	}
-	if rec := in.Record; rec != nil && len(rec.Reviews) > 0 {
-		last := rec.Reviews[len(rec.Reviews)-1]
+	tr := st.ReviewTrail()
+	if tr != nil && len(tr.Reviews) > 0 {
+		last := tr.Reviews[len(tr.Reviews)-1]
 		in.ReviewNumber, in.ReviewDoc = last.Number, last.Doc
+	}
+	if st.IsReportReview() {
+		in.ReportReview = &ReportReview{URL: st.LatestReport(), Prefix: tr.ReviewPrefix}
 	}
 	switch st.Step {
 	case state.StepImplement:
@@ -180,17 +184,17 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 		}
 	case state.StepReview:
 		in.Action = ActionReview
-		in.ReviewNumber, in.ReviewDoc = len(in.Record.Reviews)+1, ""
+		in.ReviewNumber, in.ReviewDoc = len(tr.Reviews)+1, ""
 	case state.StepFix:
 		in.Action = ActionFix
 	case state.StepAsk:
 		in.Action = ActionAsk
-	case state.StepWalkthrough:
-		in.Action = ActionWalkthrough
-		if in.Branches, err = f.walkthroughBranches(ctx, st); err != nil {
+	case state.StepReport:
+		in.Action = ActionReport
+		if in.Branches, err = f.reportBranches(ctx, st); err != nil {
 			return Instruction{}, false, err
 		}
-		in.PreviousWalkthrough = previousWalkthrough(st)
+		in.PreviousReport = st.PreviousReport()
 	default:
 		return Instruction{}, false, fmt.Errorf("ステップ %s の指示には対応していません", st.Step)
 	}
@@ -201,7 +205,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 // 完了の条件を満たさなければ、何も書き込まずに*RejectedErrorを返す。
 // ブランチを作る実装タスクでは、inputから動作確認の項目をJSONの配列で読む。
 // [implementer] のタスクでは、計画書のチェックを確かめ、inputは読まない。
-// 処理の流れのステップでは、inputから処理の流れの場所か書かなかった理由をJSONで読む。
+// 作業報告書のステップでは、inputから作業報告書のURLと処理の流れを書かなかった理由をJSONで読む。
 // 戻り値は、次のステップを伝える文面。
 func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (string, error) {
 	return f.done(ctx, role, input, 0)
@@ -246,11 +250,8 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 	if st.Step == "" {
 		return "", reject("完了を記録するステップがありません")
 	}
-	if st.Role != role && st.Step == state.StepWalkthrough {
-		return "", reject("%s の番ではありません (%sは %s の番です)", role, st.Step.Label(), st.Role)
-	}
 	if st.Role != role {
-		return "", reject("%s の番ではありません (タスク %s の%sは %s の番です)", role, st.Task, st.Step.Label(), st.Role)
+		return "", reject("%s の番ではありません (%sは %s の番です)", role, state.Where(st.Task, st.Step), st.Role)
 	}
 	p, err := f.readPlan(ctx)
 	if err != nil {
@@ -263,33 +264,41 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 		event.Reason = st.Ask.Reason
 	}
 	rec := st.TaskRecord(st.Task)
-	if rec == nil && (st.Step == state.StepReview || st.Step == state.StepFix) {
-		return "", fmt.Errorf("タスク %s の記録がありません", st.Task)
+	tr := st.ReviewTrail()
+	if tr == nil && (st.Step == state.StepReview || st.Step == state.StepFix) {
+		return "", fmt.Errorf("%sのレビューの記録がありません", state.Where(st.Task, st.Step))
 	}
 
 	if limit > 0 {
-		if st.Step != state.StepAsk || st.Ask == nil || st.Ask.Kind != state.AskReviewLimit || rec == nil {
-			return "", reject("レビュー上限は、上限に達して人を待っているタスクでだけ延長できます")
+		if st.Step != state.StepAsk || st.Ask == nil || st.Ask.Kind != state.AskReviewLimit || tr == nil {
+			return "", reject("レビュー上限は、上限に達して人を待っているタスクか作業報告書でだけ延長できます")
 		}
-		previous := reviewLimit(rec)
-		if limit <= previous || limit <= len(rec.Reviews) {
-			return "", reject("新しいレビュー上限には、現在の上限%d回と実施済み%d回を超える回数を指定してください", previous, len(rec.Reviews))
+		previous := reviewLimit(tr)
+		if limit <= previous || limit <= len(tr.Reviews) {
+			return "", reject("新しいレビュー上限には、現在の上限%d回と実施済み%d回を超える回数を指定してください", previous, len(tr.Reviews))
 		}
-		rec.ReviewLimit = limit
+		tr.ReviewLimit = limit
 		event.Reason += fmt.Sprintf(" (レビュー上限を%d回から%d回へ延長)", previous, limit)
 	}
 
 	// 各ステップの完了を確かめ、次のステップを決める。条件を満たさなければ、
 	// 状態を書き込まずに*RejectedErrorを返す。
 	switch {
-	case st.Step == state.StepWalkthrough:
-		w, err := parseWalkthrough(input, f.Root)
+	case st.Step == state.StepReport:
+		r, err := parseReport(input)
 		if err != nil {
 			return "", reject("%v", err)
 		}
-		// 作業報告書は、resumeで履歴に処理の流れのステップを足してから、この記録を使って作る。
-		st.Walkthrough = w
+		if err := f.recordReport(st, r, now); err != nil {
+			return "", err
+		}
 		clearStep(st)
+		// 処理の流れを書いたときだけ、コードと照合するレビューを挟む。
+		if r.WalkthroughSkipped == "" {
+			if err := f.startReportReview(st, now); err != nil {
+				return "", err
+			}
+		}
 	case st.Step == state.StepImplement && rec == nil:
 		// 実装者がブランチを作らずに行うタスクは、人が結果を確かめてチェックを付けたら完了にする。
 		if t, ok := findTask(p, st.Task); !ok || !t.Done {
@@ -300,22 +309,24 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 		if err := f.checkImplement(ctx, st, p, input); err != nil {
 			return "", err
 		}
-		if err := f.startReview(ctx, st, rec, now); err != nil {
+		if err := f.startTaskReview(ctx, st, rec, now); err != nil {
 			return "", err
 		}
 	case st.Step == state.StepReview:
-		if err := f.finishReview(ctx, st, rec, now); err != nil {
+		if err := f.finishReview(st, tr, now); err != nil {
 			return "", err
 		}
 	case st.Step == state.StepFix:
-		if err := checkFix(ctx, rec); err != nil {
-			return "", err
+		if rec != nil {
+			if err := checkFix(ctx, rec); err != nil {
+				return "", err
+			}
 		}
-		if err := f.afterFix(ctx, st, rec, now); err != nil {
+		if err := f.afterFix(st, tr, now); err != nil {
 			return "", err
 		}
 	case st.Step == state.StepAsk:
-		if err := f.finishAsk(ctx, st, p, rec, now); err != nil {
+		if err := f.finishAsk(ctx, st, p, tr, now); err != nil {
 			return "", err
 		}
 	default:
@@ -335,10 +346,10 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 }
 
 // finishAskは人への確認の完了を、尋ねた場面ごとの条件で確かめ、次のステップを決める。
-// recは進めているタスクの記録で、人が行うタスクではnil。
-func (f *Flow) finishAsk(ctx context.Context, st *state.State, p *plan.Plan, rec *state.TaskRecord, now time.Time) error {
+// trは進めているタスクか作業報告書のレビューの記録で、人が行うタスクではnil。
+func (f *Flow) finishAsk(ctx context.Context, st *state.State, p *plan.Plan, tr *state.ReviewTrail, now time.Time) error {
 	if st.Ask == nil {
-		return fmt.Errorf("タスク %s で人に尋ねている理由がありません", st.Task)
+		return fmt.Errorf("%sの理由がありません", state.Where(st.Task, st.Step))
 	}
 	switch st.Ask.Kind {
 	case state.AskHumanTask:
@@ -359,15 +370,15 @@ func (f *Flow) finishAsk(ctx context.Context, st *state.State, p *plan.Plan, rec
 			return &RejectedError{Reasons: append([]string{"まだブランチを準備できません"}, st.Ask.Details...)}
 		}
 	case state.AskReview, state.AskReviewLimit:
-		if rec == nil || len(rec.Reviews) == 0 {
-			return fmt.Errorf("タスク %s のレビューの記録がありません", st.Task)
+		if tr == nil || len(tr.Reviews) == 0 {
+			return fmt.Errorf("%sのレビューの記録がありません", state.Where(st.Task, st.Step))
 		}
-		d, err := f.readReview(rec.Reviews[len(rec.Reviews)-1].Doc)
+		d, err := f.readReview(tr.Reviews[len(tr.Reviews)-1].Doc)
 		if err != nil {
 			return err
 		}
 		wasReviewAsk := st.Ask.Kind == state.AskReview
-		if err := f.answer(ctx, st, rec, d, now); err != nil {
+		if err := f.answer(st, tr, d, now); err != nil {
 			return err
 		}
 		// 上限で尋ねたあとは、続けて要人間判断の指摘を尋ねてよい。
@@ -393,7 +404,7 @@ func (f *Flow) resume(ctx context.Context, st *state.State, p *plan.Plan) error 
 		return err
 	}
 	if st.Step == "" {
-		if err := f.finishPlan(ctx, st, p); err != nil {
+		if err := f.finishPlan(st); err != nil {
 			return err
 		}
 	}
@@ -404,15 +415,15 @@ func (f *Flow) resume(ctx context.Context, st *state.State, p *plan.Plan) error 
 // completionMessageは、完了の記録後に次のステップを伝える文面を返す。
 func (f *Flow) completionMessage(st *state.State) string {
 	if st.Step == "" {
-		if path := f.latestReport(st); path != "" {
-			return fmt.Sprintf("記録しました。計画書の最後まで進みました。作業報告書: %s", path)
+		if url := st.LatestReport(); url != "" {
+			return fmt.Sprintf("記録しました。計画書の最後まで進みました。作業報告書: %s", url)
 		}
 		return "記録しました。計画書の最後まで進みました。"
 	}
-	if st.Step == state.StepWalkthrough {
-		return fmt.Sprintf("記録しました。計画書の最後まで進みました。次は%sで、%s の番です。", st.Step.Label(), st.Role)
+	if st.Step == state.StepReport {
+		return fmt.Sprintf("記録しました。計画書の最後まで進みました。次は%sで、%s の番です。", state.Where(st.Task, st.Step), st.Role)
 	}
-	return fmt.Sprintf("記録しました。次はタスク %s の%sで、%s の番です。", st.Task, st.Step.Label(), st.Role)
+	return fmt.Sprintf("記録しました。次は%sで、%s の番です。", state.Where(st.Task, st.Step), st.Role)
 }
 
 // checkImplementは実装の完了の条件を確かめ、満たしていれば動作確認の項目を記録に入れる。

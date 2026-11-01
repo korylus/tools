@@ -120,18 +120,32 @@ func (fx fixture) approve(t *testing.T, id string) string {
 	return msg
 }
 
-// skipWalkthroughは、計画書の最後で実装者に処理の流れの指示が来ることを確かめ、
-// 書かなかった理由を渡して完了を記録する。Doneの文面を返す。
-func (fx fixture) skipWalkthrough(t *testing.T) string {
+// testReportURLは、テストで実装者が書いたことにする作業報告書のURL。
+const testReportURL = "https://wikino.app/s/demo/pages/2"
+
+// writeReportは、計画書の最後で実装者に作業報告書の指示が来ることを確かめ、
+// 作業報告書のURLと処理の流れを書かなかった理由を渡して完了を記録する。
+// 処理の流れを書かなかったため、作業報告書のレビューを挟まずに終える。Doneの文面を返す。
+func (fx fixture) writeReport(t *testing.T) string {
 	t.Helper()
-	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionWalkthrough {
-		t.Fatalf("指示 = %+v、処理の流れの指示を期待", in)
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionReport {
+		t.Fatalf("指示 = %+v、作業報告書の指示を期待", in)
 	}
-	msg, err := fx.done(state.RoleImplementer, `{"skipped":"テストのため"}`)
+	msg, err := fx.done(state.RoleImplementer, `{"location":"`+testReportURL+`","walkthrough_skipped":"テストのため"}`)
 	if err != nil {
-		t.Fatalf("処理の流れのDoneのエラー = %v", err)
+		t.Fatalf("作業報告書のDoneのエラー = %v", err)
 	}
 	return msg
+}
+
+// factsは、Reportが組み立てる事実を返す。
+func (fx fixture) facts(t *testing.T) string {
+	t.Helper()
+	out, err := fx.flow.Report(context.Background())
+	if err != nil {
+		t.Fatalf("Report()のエラー = %v", err)
+	}
+	return string(out)
 }
 
 // checkTaskは計画書のタスクidにチェックを付ける。
@@ -297,8 +311,8 @@ func TestFlowTasks(t *testing.T) {
 	if msg := fx.approve(t, "1-3"); !strings.Contains(msg, "最後まで進みました") {
 		t.Fatalf("Done() = %q", msg)
 	}
-	if msg := fx.skipWalkthrough(t); !strings.Contains(msg, "作業報告書") {
-		t.Fatalf("処理の流れのDone() = %q", msg)
+	if msg := fx.writeReport(t); !strings.Contains(msg, "作業報告書: "+testReportURL) {
+		t.Fatalf("作業報告書のDone() = %q", msg)
 	}
 	select {
 	case in := <-finished:
@@ -327,7 +341,7 @@ func TestFlowTasks(t *testing.T) {
 	for _, e := range events {
 		steps = append(steps, e.Task+":"+string(e.Step))
 	}
-	if got, want := strings.Join(steps, ","), "1-1:implement,1-1:review,1-2:ask,1-3:implement,1-3:review,:walkthrough"; got != want {
+	if got, want := strings.Join(steps, ","), "1-1:implement,1-1:review,1-2:ask,1-3:implement,1-3:review,:report"; got != want {
 		t.Errorf("所要時間の記録 = %s、期待値 = %s", got, want)
 	}
 }
@@ -641,16 +655,16 @@ func TestFlowMissingPreviousBranch(t *testing.T) {
 			t.Fatalf("実装のDoneのエラー = %v", err)
 		}
 		fx.approve(t, "1-3")
-		fx.skipWalkthrough(t)
+		fx.writeReport(t)
 
-		out := fx.readReport(t, 1)
+		out := fx.facts(t)
 		for _, want := range []string{
 			"| ブランチ `demo-1-1` がローカルに残っていないため示せません |",
 			"| `demo-1-3` (元: `main`) | テスト以外",
 			"| `" + fx.repo + "` | `demo-1-1` (ローカルに残っていません) | `main` | 1-1 |\n| `" + fx.repo + "` | `demo-1-3` | `main` | 1-3 |\n",
 		} {
 			if !strings.Contains(out, want) {
-				t.Errorf("作業報告書に %q が無い:\n%s", want, out)
+				t.Errorf("事実に %q が無い:\n%s", want, out)
 			}
 		}
 		if strings.Contains(out, "読めません") {
@@ -814,15 +828,15 @@ func TestFlowImplementerTask(t *testing.T) {
 		t.Fatalf("実装のDoneのエラー = %v", err)
 	}
 	fx.approve(t, "1-2")
-	fx.skipWalkthrough(t)
+	fx.writeReport(t)
 
-	out := fx.readReport(t, 1)
+	out := fx.facts(t)
 	for _, want := range []string{
 		"## 実装者が行ったタスク\n\nブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n- 1-1 [implementer] 下書きを作る\n",
 		"| `" + fx.repo + "` | `demo-1-2` | `main` | 1-2 |\n",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("作業報告書に %q が無い:\n%s", want, out)
+			t.Errorf("事実に %q が無い:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "### 1-1 ") {
