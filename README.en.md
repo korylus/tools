@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-10-31 -->
+<!-- last_synced: 2026-11-01 -->
 
 # korylus-tools
 
@@ -75,14 +75,14 @@ Specify the plan by the URL of a Wikino page (`https://wikino.app/s/<space>/page
 A path or a page number alone is not accepted (see "[Plan names and plans on Wikino pages](#plan-names-and-plans-on-wikino-pages)").
 The role is one of `implementer`, `reviewer-codex` (reviewer (Codex)), and `reviewer-claude` (reviewer (Claude Code)).
 
-| Subcommand | Role                                                                                                                                                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `wait`     | Wait until it is the role's turn and write the next instruction to standard output; return `action: wait` if the turn does not come within `-timeout`                                                                                                  |
-| `done`     | Check and record the completion of the current step and decide the next step; read verification items for the implementation step, or the walkthrough location or the reason for not writing one for the walkthrough step, as JSON from standard input |
-| `status`   | Show the plan's progress, the current task, step, role whose turn it is, why it is waiting for a human, and the time spent                                                                                                                             |
-| `report`   | Rebuild the latest version of the work report; if steps were recorded after the latest version, build the next version                                                                                                                                 |
+| Subcommand | Role                                                                                                                                                                                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `wait`     | Wait until it is the role's turn and write the next instruction to standard output; return `action: wait` if the turn does not come within `-timeout`                                                                                                        |
+| `done`     | Check and record the completion of the current step and decide the next step; read verification items for the implementation step, or the work report URL and the reason for not writing a walkthrough for the work report step, as JSON from standard input |
+| `status`   | Show the plan's progress, the current task, step, role whose turn it is, why it is waiting for a human, and the time spent                                                                                                                                   |
+| `report`   | Write facts gathered from the state, the plan, and git, such as the PRs to merge, to standard output; it does not change the state                                                                                                                           |
 
-The first line of an instruction is `action: <kind>` (`implement`, `work`, `review`, `fix`, `ask`, `walkthrough`, `finish`, or `wait`).
+The first line of an instruction is `action: <kind>` (`implement`, `work`, `review`, `fix`, `ask`, `report`, `finish`, or `wait`).
 It is followed by the skill and arguments to run and every step to take afterwards, every time.
 This lets a session continue from the latest instruction alone, even after its context has been compacted.
 
@@ -96,7 +96,7 @@ This lets a session continue from the latest instruction alone, even after its c
 
 ### Plan names and plans on Wikino pages
 
-The plan name is used for the state location, branch names, and the heading of work reports.
+The plan name is used for the state location, branch names, and the heading of `korylusflow report`.
 Write it before the first `## ` heading of the plan, on a line of the following form.
 Use only lowercase letters, digits, and hyphens between them in the value.
 
@@ -123,11 +123,12 @@ When the plan cannot be read, for example because you are not logged in or hit t
 
 For tasks done by a human, findings that need a human decision, and reaching the review limit, it tells the current session to ask the human.
 
-When the plan reaches the end, before building the work report, it tells the implementer to write a walkthrough document (`action: walkthrough`).
-The instruction lists the last task branch per repository with its head commit, and the location of the walkthrough written for the previous version.
-The implementer writes the walkthrough with `/korylus-write-walkthrough` and passes its location (`{"location":"<URL or path>"}`) or the reason for not writing one (`{"skipped":"<reason>"}`) to `done`.
-The location must be a URL starting with `https://` or an existing file given as a path relative to the project root.
-`korylusflow` only records the location and the reason; it does not read the walkthrough itself.
+When the plan reaches the end, it tells the implementer to write a work report on Wikino (`action: report`).
+The instruction lists the last task branch per repository with its head commit, and the URL of the work report written in the previous round.
+The implementer writes the work report with `/korylus-write-report` and passes its URL (`{"location":"<URL>"}`) to `done`.
+When the implementer did not write a walkthrough, they add the reason (`{"location":"<URL>","walkthrough_skipped":"<reason>"}`).
+The URL must start with `https://`.
+`korylusflow` only records the URL and the reason; it neither reads the work report nor writes to Wikino.
 
 Task prefixes are read as follows.
 
@@ -162,43 +163,43 @@ When a task has a `**担当**:` (assignee) line under it, the prefix is read onl
 | Present                         | Not a path            | Ask the human (the prefix and the assignee line disagree)           |
 
 A task with more than one assignee line, or with an empty value, is an error that stops the plan from being read.
-`korylusflow status` and the work report show the assignee of tasks that have the line (for example, `1-2 ヘルプページの下書きを作る (担当: implementer)`).
+`korylusflow status` and `korylusflow report` show the assignee of tasks that have the line (for example, `1-2 ヘルプページの下書きを作る (担当: implementer)`).
 
-### Work report
+### Work reports and facts
 
-When the plan reaches the end, it builds a Markdown work report `report-<version>.md` from the state, timing records, the plan, and git.
-It does not have an LLM write any text; it lists only the facts in the records.
+A work report is a document the implementer writes on a Wikino page, with a walkthrough and sections for feedback.
+A human reads the work report, collects feedback, adds feedback tasks to the plan, and runs the loop again.
+Each time the plan reaches the end, the implementer updates the same work report, and `korylusflow` records its URL for that round.
 
-- Overview (plan, period, the walkthrough location or the reason for not writing one, and the PR to merge per repository)
+`korylusflow report` writes facts gathered from the state, timing records, the plan, and git to standard output.
+It does not mix in explanations by agents; it lists only the facts in the records.
+It does not change the state, so you can run it in the middle of the loop.
+
+- Overview (plan, when the plan started, the URL of the latest work report, and the PR to merge per repository)
 - Changes per task (a table with one row per task: branch, changed line counts, expected line counts, and review verdicts)
 - Tasks the implementer did without creating a branch
 - Deferred findings
 - Protected areas (what was declared and the command to see the diff)
-- The verification checklist and a field for overall comments
 
-Time spent and time spent waiting for a human are not in the work report; `korylusflow status` shows them.
-When `report` rebuilds a version made before the walkthrough step existed, it shows the walkthrough as not recorded.
+`korylusflow status` shows the time spent and the time spent waiting for a human.
 
 `korylusflow` does not push, create PRs, or merge.
-After a human checks the work report, they create one PR per repository from the last task's branch to the first task's base branch and merge it with a merge commit.
-When the branches do not form a single line, for example because the previous task's branch no longer existed and the branch was recreated from the first base, the report shows a PR for each connected line.
+After a human checks the work report, they follow the PRs to merge in `korylusflow report`: one PR per repository from the last task's branch to the first task's base branch, merged with a merge commit.
+When the branches do not form a single line, for example because the previous task's branch no longer existed and the branch was recreated from the first base, it shows a PR for each connected line.
 
-A human checks OK or NG for each checklist item and writes comments.
-If tasks are added to the plan and the loop runs again, it builds the next version at the end of the plan.
-The next version lists the items that were NG in the previous version and new items first, and lists items that were OK in an earlier version only by title as verified.
-Rebuilding the same version with `report` keeps the results already written in it.
-If what was written hides the report's section boundaries, for example with an unclosed code block, it does not rebuild the report and shows what to fix instead.
+State written while Markdown work reports (`report-<version>.md`) were built can still be read.
+Earlier versions are carried over as rounds without a page, and the next time the plan reaches the end, the implementer creates a new work report page.
+Existing `report-<version>.md` files are not deleted.
 
-### Where state and work reports are stored
+### Where state is stored
 
-State and work reports are kept in `docs/private/plans/files/<plan name>/` so that they remain as history together with the plan.
+State is kept in `docs/private/plans/files/<plan name>/` so that it remains as history together with the plan.
 
-| File                  | Content                                                                 |
-| --------------------- | ----------------------------------------------------------------------- |
-| `flow.json`           | The current task, step, and role whose turn it is, and records per task |
-| `flow.lock`           | An empty file for the file lock                                         |
-| `timeline.jsonl`      | The start and end times of each step                                    |
-| `report-<version>.md` | Work reports                                                            |
+| File             | Content                                                                 |
+| ---------------- | ----------------------------------------------------------------------- |
+| `flow.json`      | The current task, step, and role whose turn it is, and records per task |
+| `flow.lock`      | An empty file for the file lock                                         |
+| `timeline.jsonl` | The start and end times of each step                                    |
 
 ### Installing
 

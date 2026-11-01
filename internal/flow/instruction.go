@@ -18,9 +18,9 @@ const (
 	ActionReview Action = "review"
 	ActionFix    Action = "fix"
 	ActionAsk    Action = "ask"
-	// ActionWalkthroughは、計画書の最後に作業報告書を作る前に、処理の流れを書く指示。
-	ActionWalkthrough Action = "walkthrough"
-	ActionFinish      Action = "finish"
+	// ActionReportは、計画書の最後に作業報告書を書く指示。
+	ActionReport Action = "report"
+	ActionFinish Action = "finish"
 	// ActionWaitは、waitの-timeoutを過ぎても番が来なかったときの指示。
 	ActionWait Action = "wait"
 )
@@ -45,12 +45,12 @@ type Instruction struct {
 	// レビュードキュメントで、レビューの指示では空。
 	ReviewNumber int
 	ReviewDoc    string
-	// Reportは、終了の指示で、計画書の最後で作った作業報告書のパス。
+	// Reportは、終了の指示で、計画書の最後に書いた作業報告書のURL。
 	Report string
-	// Branchesは、処理の流れの指示で、リポジトリごとの最後のタスクのブランチ。
-	Branches []WalkthroughBranch
-	// PreviousWalkthroughは、処理の流れの指示で、前の版までに書いた処理の流れの場所。無ければ空文字。
-	PreviousWalkthrough string
+	// Branchesは、作業報告書の指示で、リポジトリごとの最後のタスクのブランチ。
+	Branches []ReportBranch
+	// PreviousReportは、作業報告書の指示で、前の回までに書いた作業報告書のURL。無ければ空文字。
+	PreviousReport string
 }
 
 // Stringは指示を、役割のセッションが読む文面にする。コンテキストが圧縮されたあとでも
@@ -87,11 +87,11 @@ func (in Instruction) String() string {
 		in.writeFix(&b)
 	case ActionAsk:
 		in.writeAsk(&b)
-	case ActionWalkthrough:
-		in.writeWalkthrough(&b)
+	case ActionReport:
+		in.writeReport(&b)
 	case ActionFinish:
 		if in.Report != "" {
-			fmt.Fprintf(&b, "計画書の最後まで進んだ。作業報告書 %s を作ったことを人に伝え、ループを終える。\n", code(in.Report))
+			fmt.Fprintf(&b, "計画書の最後まで進んだ。作業報告書 %s を書いたことを人に伝え、ループを終える。\n", in.Report)
 		} else {
 			b.WriteString("計画書の最後まで進んだ。ループを終える。\n")
 		}
@@ -188,7 +188,7 @@ func (in Instruction) writeAsk(b *strings.Builder) {
 	writeSteps(b, steps)
 }
 
-func (in Instruction) writeWalkthrough(b *strings.Builder) {
+func (in Instruction) writeReport(b *strings.Builder) {
 	b.WriteString("リポジトリごとの最後のタスクのブランチ:\n")
 	if len(in.Branches) == 0 {
 		b.WriteString("- なし (ブランチを作ったタスクがありません)\n")
@@ -200,18 +200,18 @@ func (in Instruction) writeWalkthrough(b *strings.Builder) {
 		}
 		fmt.Fprintf(b, "- %s: %s (%s)\n", br.Repo, code(br.Branch), commit)
 	}
-	if in.PreviousWalkthrough != "" {
-		fmt.Fprintf(b, "前の版の処理の流れ: %s\n", in.PreviousWalkthrough)
+	if in.PreviousReport != "" {
+		fmt.Fprintf(b, "前の回の作業報告書: %s\n", in.PreviousReport)
 	}
 	b.WriteString("\n")
 
-	write := fmt.Sprintf("%s を実行し、計画書で実装したものの処理の流れを書く", code("/korylus-write-walkthrough "+in.PlanURL))
-	if in.PreviousWalkthrough != "" {
-		write += "。前の版の処理の流れを、新しく作らずに上のブランチのコードに合わせて更新する"
+	write := fmt.Sprintf("%s を実行し、計画書の作業報告書を書く", code("/korylus-write-report "+in.PlanURL))
+	if in.PreviousReport != "" {
+		write += "。前の回の作業報告書を、新しく作らずに上のブランチのコードに合わせて更新する"
 	}
 	steps := []string{
 		write + "。ブランチは切り替えない",
-		fmt.Sprintf("%s を、処理の流れの場所か書かなかった理由のJSONを標準入力に渡して実行する\n   形: %s", code(in.doneCommand()), walkthroughExample),
+		fmt.Sprintf("%s を、作業報告書のURL (処理の流れを書かなかったときはその理由も) のJSONを標準入力に渡して実行する\n   形: %s", code(in.doneCommand()), reportExample),
 		"done が受け付けられなかったら、理由を読んで直してから2をやり直す。直せなければ人に尋ねる",
 		fmt.Sprintf("受け付けられたら %s で次の指示を待つ", code(in.waitCommand())),
 	}

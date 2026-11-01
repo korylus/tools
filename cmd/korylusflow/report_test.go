@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -23,13 +22,14 @@ func TestReport(t *testing.T) {
 		assertContains(t, stderr.String(), "まだループを始めていません")
 	})
 
-	t.Run("計画書の最後まで進んでいれば作業報告書を書く", func(t *testing.T) {
+	t.Run("事実を標準出力に書き、状態は書き換えない", func(t *testing.T) {
 		t.Parallel()
 		planPath := writePlan(t)
 		stateRoot := t.TempDir()
 		dir := state.NewDir(stateRoot, "korylusflow")
 		now := time.Now()
-		if err := dir.Save(&state.State{}, now); err != nil {
+		url := "https://wikino.app/s/demo/pages/2"
+		if err := dir.Save(&state.State{Reports: []state.ReportRound{{Number: 1, Events: 1, At: now, Location: url}}}, now); err != nil {
 			t.Fatal(err)
 		}
 		if err := dir.AppendEvent(state.Event{Task: "2-2", Step: state.StepAsk, Role: state.RoleImplementer, Started: now.Add(-time.Hour), Ended: now, Reason: "人が行うタスクです"}); err != nil {
@@ -40,17 +40,19 @@ func TestReport(t *testing.T) {
 		if code := report(context.Background(), []string{planPath}, stateRoot, sourcetest.Parse, &stdout, &stderr); code != exitOK {
 			t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 		}
-		assertContains(t, stdout.String(), "作業報告書を書きました: "+dir.ReportPath(1))
-		out, err := os.ReadFile(dir.ReportPath(1))
+		assertContains(t, stdout.String(), "# 計画書の事実: korylusflow\n", "- 計画書の開始: ", "- 作業報告書: 1回目 "+url+"\n", "### マージするPR\n")
+		st, err := dir.Load()
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertContains(t, string(out), "# 作業報告書 第1版: korylusflow", "- 計画書の開始: ")
+		if !st.UpdatedAt.Equal(now) {
+			t.Errorf("状態の最終更新 = %v、reportで書き換えないことを期待 (%v)", st.UpdatedAt, now)
+		}
 
 		stdout.Reset()
 		if code := status(context.Background(), []string{planPath}, stateRoot, sourcetest.Parse, now, &stdout, &stderr); code != exitOK {
 			t.Fatalf("statusの終了コード = %d、標準エラー = %s", code, stderr.String())
 		}
-		assertContains(t, stdout.String(), "作業報告書: 第1版 ("+dir.ReportPath(1)+")")
+		assertContains(t, stdout.String(), "作業報告書: 1回目 ("+url+")")
 	})
 }

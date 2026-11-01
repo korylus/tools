@@ -38,7 +38,7 @@ func at(m int) time.Time {
 	return t0.Add(time.Duration(m) * time.Minute)
 }
 
-// newInputは、タスク1-1を終えた計画書の第1版の入力を作る。
+// newInputは、タスク1-1を終えた計画書の入力を作る。
 func newInput(t *testing.T, src string) Input {
 	t.Helper()
 	p, err := plan.Parse(src)
@@ -57,7 +57,7 @@ func newInput(t *testing.T, src string) Input {
 		},
 	}}}
 	return Input{
-		PlanURL: "https://wikino.app/s/shimbaco/pages/12", Name: "demo", Plan: p, Version: 1, Now: at(120), State: st,
+		PlanURL: "https://wikino.app/s/shimbaco/pages/12", Name: "demo", Plan: p, State: st,
 		Events: []state.Event{
 			{Task: "1-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(0), Ended: at(30)},
 			{Task: "1-1", Step: state.StepReview, Role: state.RoleReviewerCodex, Started: at(30), Ended: at(50)},
@@ -79,25 +79,9 @@ func assertContains(t *testing.T, out string, wants ...string) {
 	t.Helper()
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
-			t.Errorf("作業報告書に %q が無い:\n%s", want, out)
+			t.Errorf("出力に %q が無い:\n%s", want, out)
 		}
 	}
-}
-
-// answerは作業報告書outの項目numberのチェックボックスstatusにチェックを付け、コメントを書く。
-func answer(t *testing.T, out string, number, status, comment string) string {
-	t.Helper()
-	start := strings.Index(out, "### #"+number+" ")
-	if start < 0 {
-		t.Fatalf("項目 #%s が無い:\n%s", number, out)
-	}
-	block := out[start:]
-	if end := strings.Index(block[1:], "\n### "); end >= 0 {
-		block = block[:end+1]
-	}
-	answered := strings.Replace(block, "- [ ] "+status, "- [x] "+status, 1)
-	answered = strings.Replace(answered, "コメント:\n", "コメント:\n\n"+comment+"\n", 1)
-	return strings.Replace(out, block, answered, 1)
 }
 
 func TestBuild(t *testing.T) {
@@ -105,9 +89,10 @@ func TestBuild(t *testing.T) {
 
 	out := string(Build(newInput(t, testPlan)))
 	assertContains(t, out,
-		"# 作業報告書 第1版: demo\n",
+		"# 計画書の事実: demo\n",
 		"- 計画書: `https://wikino.app/s/shimbaco/pages/12`\n",
 		"- 計画書の開始: 2026-10-22 09:00 +00:00\n",
+		"- 作業報告書: まだ書いていません\n",
 		"### マージするPR\n\nリポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n",
 		"| `/repo` | `demo-1-1` | `develop` | 1-1 |\n",
 		"## タスクごとの変更\n\n変更行数は、元のブランチからタスクのブランチまでの追加と削除の合計です。\n\n",
@@ -115,85 +100,13 @@ func TestBuild(t *testing.T) {
 		`| 1-1 | 名前\|を改める | 後続タスクに積む (推奨) |`,
 		"- 宣言: モジュール間の依存関係 (flowからplanへの依存)\n",
 		"- 差分を見るコマンド: `git -C /repo diff develop...demo-1-1`\n",
-		"### #1 statusを表示できる\n\n<!-- item: task/1-1/1 -->\n",
-		"- 種類: 処理\n- コマンド: `korylusflow status demo.md`\n",
-		"### #2 画面を開ける\n",
-		"- パス: `/settings`\n",
-		"1. ログインする\n2. 開く\n",
-		"### #3 保護領域「モジュール間の依存関係」の変更が合意した設計どおりになっている\n\n<!-- item: protected/1-1/モジュール間の依存関係 -->\n",
-		"\n結果:\n\n- [ ] OK\n- [ ] NG\n\nコメント:\n",
 		"コードを変更しない方針を選んだ指摘です。\n",
-		"## 全体へのコメント\n",
 	)
-	for _, unwanted := range []string{"1-3", "この版で進めた", "前の版", "## 人を待った履歴", "## 所要時間", "状態をどこに置くか?", "a.png", "コミット:"} {
+	// 動作確認の項目は作業報告書の材料で、事実としては出さない。
+	for _, unwanted := range []string{"1-3", "## 人を待った履歴", "## 所要時間", "状態をどこに置くか?", "a.png", "コミット:", "動作確認", "statusを表示できる", "全体へのコメント"} {
 		if strings.Contains(out, unwanted) {
-			t.Errorf("作業報告書に %q がある:\n%s", unwanted, out)
+			t.Errorf("出力に %q がある:\n%s", unwanted, out)
 		}
-	}
-}
-
-func TestBuildNextVersion(t *testing.T) {
-	t.Parallel()
-
-	first := string(Build(newInput(t, testPlan)))
-	first = answer(t, first, "1", "NG", "一覧が空だった")
-	first = answer(t, first, "2", "OK", "")
-	first += "\nフォントが小さい\n"
-	prev := ParseResults(first)
-
-	src := testPlan + "\n### フェーズfb1: 動作確認のフィードバック対応 (第1版)\n\n" +
-		"- [x] **fb1-1**: [/repo/go] 一覧を直す\n  - **対応する確認項目**: 第1版 #1 「statusを表示できる」\n"
-	in := newInput(t, src)
-	in.Version, in.Since, in.Previous, in.Now = 2, len(in.Events), prev, at(300)
-	in.State.Tasks = append(in.State.Tasks, state.TaskRecord{
-		ID: "fb1-1", Repo: "/repo", Dir: "/repo/go", Branch: "demo-fb1-1", Base: "demo-1-1", Prepared: true,
-		Verification: []state.VerificationItem{{Kind: "process", Title: "一覧が出る", Target: "korylusflow status", Steps: []string{"実行する"}, Expected: "1件以上出る"}},
-	})
-	in.Events = append(in.Events, state.Event{Task: "fb1-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(200), Ended: at(230)})
-
-	out := string(Build(in))
-	assertContains(t, out,
-		"- この版の期間: 2026-10-22 12:20 +00:00 〜 2026-10-22 14:00 +00:00\n",
-		"- 前の版: 第1版\n- 処理の流れ: 記録なし\n\n前の版の全体へのコメント:\n\n> フォントが小さい\n",
-		"| fb1-1 [/repo/go] 一覧を直す (この版で進めたタスク) | `demo-fb1-1` (元: `demo-1-1`) | テスト以外0行・テスト0行 | 記載なし | なし |\n",
-		"| `/repo` | `demo-fb1-1` | `develop` | 1-1・fb1-1 |\n",
-		"### #1 statusを表示できる\n\n<!-- item: task/1-1/1 -->\n",
-		"- 前の版の結果: 第1版 #1 NG\n- 対応したフィードバックのタスク: fb1-1\n\n前の版のコメント:\n\n> 一覧が空だった\n",
-		"### #2 一覧が出る\n",
-		"### #3 保護領域「モジュール間の依存関係」",
-		"- 前の版の結果: 第1版 #3 未確認\n",
-		"### 確認済みの項目\n",
-		"- #4 画面を開ける (対象タスク: 1-1) <!-- confirmed: task/1-1/2 -->\n",
-	)
-	if strings.Contains(out, "| 1-1 [/repo/go] 状態を作る (この版で") {
-		t.Errorf("前の版のタスクを、この版で進めたタスクとして表示した:\n%s", out)
-	}
-
-	// 確認済みの項目は、次の版でも確認済みのままにする。
-	in.Version, in.Previous = 3, ParseResults(out)
-	third := string(Build(in))
-	assertContains(t, third, "<!-- confirmed: task/1-1/2 -->")
-	if strings.Contains(third, "### #4 画面を開ける") {
-		t.Errorf("確認済みの項目を、チェックリストに戻した:\n%s", third)
-	}
-}
-
-func TestBuildKeepsCurrentResults(t *testing.T) {
-	t.Parallel()
-
-	in := newInput(t, testPlan)
-	written := answer(t, string(Build(in)), "2", "NG", "ボタンが無い\n2行目")
-	written += "\n全体のメモ\n"
-	in.Current = ParseResults(written)
-
-	out := string(Build(in))
-	assertContains(t, out,
-		"### #2 画面を開ける\n",
-		"- [ ] OK\n- [x] NG\n\nコメント:\n\nボタンが無い\n2行目\n",
-		"<!-- チェックリストに無い気づきを、この下に書く -->\n\n全体のメモ\n",
-	)
-	if got := ParseResults(out); got.Items["task/1-1/2"] != in.Current.Items["task/1-1/2"] || got.Comment != "全体のメモ" {
-		t.Errorf("作り直した作業報告書の結果 = %+v、期待値 = %+v", got, in.Current)
 	}
 }
 
@@ -208,7 +121,6 @@ func TestBuildWithoutTasks(t *testing.T) {
 		"## 先送りした指摘\n\nなし\n",
 		"## タスクごとの変更\n\nなし\n",
 		"保護領域を宣言したタスクはありません。\n",
-		"確認する項目はありません。\n",
 	)
 }
 
@@ -258,70 +170,6 @@ func TestBuildMissingBranches(t *testing.T) {
 	assertContains(t, out, "| ブランチ `demo-1-1`・`develop` がローカルに残っていないため示せません |")
 	if strings.Contains(out, "読めません") {
 		t.Errorf("ブランチが残っていないときにgitのエラーを示している:\n%s", out)
-	}
-}
-
-func TestParseResults(t *testing.T) {
-	t.Parallel()
-
-	src := `## 動作確認チェックリスト
-
-### #1 一覧
-
-<!-- item: task/1-1/1 -->
-
-- [X] OK
-- [x] NG
-
-コメント:
-
-<!-- 案内 -->
-1行目
-
-2行目
-
-### #2 画面
-
-<!-- item: task/1-1/2 -->
-
-* [x] OK
-* [ ] NG
-
-コメント:
-
-### #3 IDの無い項目
-
-- [x] OK
-
-### 確認済みの項目
-
-- #4 保護領域 (対象タスク: 1-1) <!-- confirmed: protected/1-1/依存 -->
-
-## 全体へのコメント
-
-<!-- チェックリストに無い気づきを、この下に書く -->
-
-全体の
-メモ
-`
-	got := ParseResults(src)
-	want := map[string]Result{
-		"task/1-1/1": {Number: 1, Status: StatusNG, Comment: "<!-- 案内 -->\n1行目\n\n2行目"},
-		"task/1-1/2": {Number: 2, Status: StatusOK, Comment: "### #3 IDの無い項目\n\n- [x] OK"},
-	}
-	if len(got.Items) != len(want) {
-		t.Errorf("項目の数 = %d、期待値 = %d (%+v)", len(got.Items), len(want), got.Items)
-	}
-	for id, w := range want {
-		if got.Items[id] != w {
-			t.Errorf("項目 %s = %+v、期待値 = %+v", id, got.Items[id], w)
-		}
-	}
-	if !got.Confirmed["protected/1-1/依存"] || len(got.Confirmed) != 1 {
-		t.Errorf("確認済みの項目 = %v", got.Confirmed)
-	}
-	if got.Comment != "全体の\nメモ" {
-		t.Errorf("全体へのコメント = %q", got.Comment)
 	}
 }
 
@@ -401,15 +249,13 @@ func TestBuildImplementerTasks(t *testing.T) {
 	assertContains(t, out, "## 実装者が行ったタスク\n\nなし\n")
 
 	// 実装のステップを記録したのに記録を持たないタスクを、進めた順に1度だけ並べる。
-	in.Version, in.Since = 2, len(in.Events)
 	in.Events = append(in.Events,
 		state.Event{Task: "2-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(200), Ended: at(210)},
 		state.Event{Task: "2-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(210), Ended: at(220)},
 	)
 	in.Events = append([]state.Event{{Task: "0-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(0), Ended: at(1)}}, in.Events...)
-	in.Since++
 	out = string(Build(in))
-	assertContains(t, out, "## 実装者が行ったタスク\n\nブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n- 0-1\n- 2-1 (この版で進めたタスク)\n")
+	assertContains(t, out, "## 実装者が行ったタスク\n\nブランチを作らずに実装者が行い、人が結果を確かめたタスクです。\n\n- 0-1\n- 2-1\n")
 }
 
 func TestBuildAssignee(t *testing.T) {
@@ -485,25 +331,37 @@ func TestBuildEscapesExpectedLines(t *testing.T) {
 	assertContains(t, rendered.String(), "<td>約100行 (UI|UX100行)</td>\n<td>Comment</td>")
 }
 
-func TestBuildWalkthrough(t *testing.T) {
+func TestBuildReportLocation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		w    *state.Walkthrough
-		want string
+		name    string
+		reports []state.ReportRound
+		want    string
 	}{
-		{"記録が無ければ記録なしと書く", nil, "- 処理の流れ: 記録なし\n"},
-		{"URLはそのまま書く", &state.Walkthrough{Location: "https://wikino.app/s/demo/pages/1"}, "- 処理の流れ: https://wikino.app/s/demo/pages/1\n"},
-		{"パスはインラインコードにする", &state.Walkthrough{Location: "docs/private/plans/files/demo/walkthrough.md"}, "- 処理の流れ: `docs/private/plans/files/demo/walkthrough.md`\n"},
-		{"書かなかった理由を書く", &state.Walkthrough{Skipped: "文面だけ|直した\nため"}, `- 処理の流れ: 書いていません (文面だけ\|直した ため)` + "\n"},
+		{"まだ書いていなければそう書く", nil, "- 作業報告書: まだ書いていません\n"},
+		{
+			"最新の回のURLをそのまま書く",
+			[]state.ReportRound{{Number: 1, Location: "https://wikino.app/s/demo/pages/1"}, {Number: 2, Location: "https://wikino.app/s/demo/pages/2"}},
+			"- 作業報告書: 2回目 https://wikino.app/s/demo/pages/2\n",
+		},
+		{
+			"処理の流れを書かなかった理由を添える",
+			[]state.ReportRound{{Number: 1, Location: "https://wikino.app/s/demo/pages/1", WalkthroughSkipped: "文面だけ|直した\nため"}},
+			`- 作業報告書: 1回目 https://wikino.app/s/demo/pages/1 (処理の流れは書いていません: 文面だけ\|直した ため)` + "\n",
+		},
+		{
+			"Markdownの作業報告書だった回はページが無いと書く",
+			[]state.ReportRound{{Number: 1}},
+			"- 作業報告書: 1回目 (Markdownの作業報告書で、ページはありません)\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			in := newInput(t, testPlan)
-			in.Walkthrough = tt.w
+			in.State.Reports = tt.reports
 			assertContains(t, string(Build(in)), tt.want)
 		})
 	}

@@ -76,8 +76,7 @@ func status(ctx context.Context, args []string, stateRoot string, parse parseSou
 	}
 	writeState(stdout, st, now)
 	if st != nil && len(st.Reports) > 0 {
-		last := st.Reports[len(st.Reports)-1]
-		fmt.Fprintf(stdout, "作業報告書: 第%d版 (%s)\n", last.Version, dir.ReportPath(last.Version))
+		writeReport(stdout, st.Reports[len(st.Reports)-1])
 	}
 	writeDurations(stdout, events)
 
@@ -102,12 +101,12 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 
 	where := fmt.Sprintf("タスク %s の%s", st.Task, st.Step.Label())
 	switch {
-	case st.Pending != nil && st.Pending.Step == state.StepWalkthrough:
+	case st.Pending != nil && st.Pending.Step == state.StepReport:
 		fmt.Fprintf(w, "状態: %sの完了を記録中 (waitかdoneで再開できます)\n", st.Pending.Step.Label())
 	case st.Pending != nil:
 		fmt.Fprintf(w, "状態: タスク %s の%sの完了を記録中 (waitかdoneで再開できます)\n", st.Pending.Task, st.Pending.Step.Label())
-	case st.Step == state.StepWalkthrough:
-		fmt.Fprintln(w, "状態: 作業報告書を作る前に、処理の流れを書いています")
+	case st.Step == state.StepReport:
+		fmt.Fprintln(w, "状態: 計画書の最後まで進み、作業報告書を書いています")
 	case st.Step == "":
 		fmt.Fprintln(w, "状態: 進めているタスクなし")
 	case st.Ask != nil:
@@ -138,6 +137,18 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 		}
 	}
 	fmt.Fprintf(w, "最終更新: %s\n", st.UpdatedAt.Format(timeLayout))
+}
+
+// writeReportは、最新の回の作業報告書を表示する。
+func writeReport(w io.Writer, r state.ReportRound) {
+	switch {
+	case r.Location == "":
+		fmt.Fprintf(w, "作業報告書: %d回目 (Markdownの作業報告書で、ページはありません)\n", r.Number)
+	case r.WalkthroughSkipped != "":
+		fmt.Fprintf(w, "作業報告書: %d回目 (%s、処理の流れは書いていません: %s)\n", r.Number, r.Location, r.WalkthroughSkipped)
+	default:
+		fmt.Fprintf(w, "作業報告書: %d回目 (%s)\n", r.Number, r.Location)
+	}
 }
 
 // writeDurationsは、記録したステップの所要時間を、役割ごとと人を待った時間に分けて表示する。

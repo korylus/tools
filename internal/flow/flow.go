@@ -3,8 +3,8 @@
 // 役割のセッションはWaitで自分の番を待って指示を受け取り、指示どおりに作業してから
 // Doneで完了を記録する。次のステップと番の役割はDoneとWaitが決め、エージェントには
 // 決めさせない。状態の読み取りから次のステップの判定・ブランチの準備・書き込みまでは、
-// 1つのファイルロックの中で行う。計画書の最後まで進んだら、実装者に処理の流れを
-// 書かせてから、作業報告書を作る。
+// 1つのファイルロックの中で行う。計画書の最後まで進んだら、実装者にWikinoの
+// 作業報告書を書かせ、そのURLを記録する。
 package flow
 
 import (
@@ -149,7 +149,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 			return Instruction{}, false, err
 		}
 		if st.Step == "" {
-			if err := f.finishPlan(ctx, st, p); err != nil {
+			if err := f.finishPlan(st); err != nil {
 				return Instruction{}, false, err
 			}
 		}
@@ -159,7 +159,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	}
 
 	if st.Step == "" {
-		return Instruction{Action: ActionFinish, Role: role, PlanURL: f.PlanURL, Report: f.latestReport(st)}, true, nil
+		return Instruction{Action: ActionFinish, Role: role, PlanURL: f.PlanURL, Report: st.LatestReport()}, true, nil
 	}
 	if st.Role != role {
 		return Instruction{}, false, nil
@@ -185,12 +185,12 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 		in.Action = ActionFix
 	case state.StepAsk:
 		in.Action = ActionAsk
-	case state.StepWalkthrough:
-		in.Action = ActionWalkthrough
-		if in.Branches, err = f.walkthroughBranches(ctx, st); err != nil {
+	case state.StepReport:
+		in.Action = ActionReport
+		if in.Branches, err = f.reportBranches(ctx, st); err != nil {
 			return Instruction{}, false, err
 		}
-		in.PreviousWalkthrough = previousWalkthrough(st)
+		in.PreviousReport = st.PreviousReport()
 	default:
 		return Instruction{}, false, fmt.Errorf("ステップ %s の指示には対応していません", st.Step)
 	}
@@ -201,7 +201,7 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 // 完了の条件を満たさなければ、何も書き込まずに*RejectedErrorを返す。
 // ブランチを作る実装タスクでは、inputから動作確認の項目をJSONの配列で読む。
 // [implementer] のタスクでは、計画書のチェックを確かめ、inputは読まない。
-// 処理の流れのステップでは、inputから処理の流れの場所か書かなかった理由をJSONで読む。
+// 作業報告書のステップでは、inputから作業報告書のURLと処理の流れを書かなかった理由をJSONで読む。
 // 戻り値は、次のステップを伝える文面。
 func (f *Flow) Done(ctx context.Context, role state.Role, input io.Reader) (string, error) {
 	return f.done(ctx, role, input, 0)
@@ -246,7 +246,7 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 	if st.Step == "" {
 		return "", reject("完了を記録するステップがありません")
 	}
-	if st.Role != role && st.Step == state.StepWalkthrough {
+	if st.Role != role && st.Step == state.StepReport {
 		return "", reject("%s の番ではありません (%sは %s の番です)", role, st.Step.Label(), st.Role)
 	}
 	if st.Role != role {
@@ -282,13 +282,14 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 	// 各ステップの完了を確かめ、次のステップを決める。条件を満たさなければ、
 	// 状態を書き込まずに*RejectedErrorを返す。
 	switch {
-	case st.Step == state.StepWalkthrough:
-		w, err := parseWalkthrough(input, f.Root)
+	case st.Step == state.StepReport:
+		r, err := parseReport(input)
 		if err != nil {
 			return "", reject("%v", err)
 		}
-		// 作業報告書は、resumeで履歴に処理の流れのステップを足してから、この記録を使って作る。
-		st.Walkthrough = w
+		if err := f.recordReport(st, r, now); err != nil {
+			return "", err
+		}
 		clearStep(st)
 	case st.Step == state.StepImplement && rec == nil:
 		// 実装者がブランチを作らずに行うタスクは、人が結果を確かめてチェックを付けたら完了にする。
@@ -393,7 +394,7 @@ func (f *Flow) resume(ctx context.Context, st *state.State, p *plan.Plan) error 
 		return err
 	}
 	if st.Step == "" {
-		if err := f.finishPlan(ctx, st, p); err != nil {
+		if err := f.finishPlan(st); err != nil {
 			return err
 		}
 	}
@@ -404,12 +405,12 @@ func (f *Flow) resume(ctx context.Context, st *state.State, p *plan.Plan) error 
 // completionMessageは、完了の記録後に次のステップを伝える文面を返す。
 func (f *Flow) completionMessage(st *state.State) string {
 	if st.Step == "" {
-		if path := f.latestReport(st); path != "" {
-			return fmt.Sprintf("記録しました。計画書の最後まで進みました。作業報告書: %s", path)
+		if url := st.LatestReport(); url != "" {
+			return fmt.Sprintf("記録しました。計画書の最後まで進みました。作業報告書: %s", url)
 		}
 		return "記録しました。計画書の最後まで進みました。"
 	}
-	if st.Step == state.StepWalkthrough {
+	if st.Step == state.StepReport {
 		return fmt.Sprintf("記録しました。計画書の最後まで進みました。次は%sで、%s の番です。", st.Step.Label(), st.Role)
 	}
 	return fmt.Sprintf("記録しました。次はタスク %s の%sで、%s の番です。", st.Task, st.Step.Label(), st.Role)

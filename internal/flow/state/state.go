@@ -5,8 +5,9 @@
 //	flow.json       現在のタスク・ステップ・番の役割と、タスクごとの記録
 //	flow.lock       ファイルロック用の空のファイル
 //	timeline.jsonl  ステップごとの開始と終了の時刻
-//	report-<版>.md  作業報告書
 //
+// 作業報告書はWikinoのページに実装者が書き、状態にはそのURLと処理の流れを
+// 書かなかった理由だけを回ごとに記録する。
 // 状態を変えるコマンドは、LockContextで取ったロックの中で読み取りから書き込みまでを行う。
 // 書き込みは一時ファイルに書いてから置き換えるため、ロックを取らずに読んでも
 // 書きかけの状態は見えない。
@@ -79,18 +80,23 @@ const (
 	StepReview    Step = "review"
 	StepFix       Step = "fix"
 	StepAsk       Step = "ask"
-	// StepWalkthroughは、計画書の最後に作業報告書を作る前に、実装者が処理の流れを書くステップ。
+	// StepReportは、計画書の最後に実装者が作業報告書を書くステップ。
 	// タスクに属さないため、状態と所要時間の記録のタスク番号は空にする。
-	StepWalkthrough Step = "walkthrough"
+	StepReport Step = "report"
 )
 
+// stepWalkthroughは、作業報告書のステップの以前の値。この値で記録した状態は、
+// 読むときにStepReportに読み替える。所要時間の記録には残っていることがある。
+const stepWalkthrough Step = "walkthrough"
+
 // stepLabelsはステップの表示名。
-var stepLabels = map[Step]string{ //#nosec G101 -- ステップの表示名で、資格情報ではない (StepWalkthroughの「pW」がパスワードの名前に見なされる)
+var stepLabels = map[Step]string{ //#nosec G101 -- ステップの表示名で、資格情報ではない (stepWalkthroughの「pW」がパスワードの名前に見なされる)
 	StepImplement:   "実装",
 	StepReview:      "レビュー",
 	StepFix:         "修正",
 	StepAsk:         "人への確認",
-	StepWalkthrough: "処理の流れの作成",
+	StepReport:      "作業報告書の作成",
+	stepWalkthrough: "処理の流れの作成",
 }
 
 // Labelはステップの表示名を返す。未知のステップは値をそのまま返す。
@@ -104,7 +110,7 @@ func (s Step) Label() string {
 // Stateは1つの計画書の状態。
 type State struct {
 	// Taskは進めているタスク番号。進めているタスクが無いときと、タスクに属さない
-	// ステップ (処理の流れの作成) を進めているときは空文字。
+	// ステップ (作業報告書の作成) を進めているときは空文字。
 	Task string `json:"task,omitempty"`
 	// Stepは進めているステップで、無ければ空文字。doneで完了が記録されるまで変えず、
 	// 次に尋ねられたときも同じ指示を返す。
@@ -120,11 +126,8 @@ type State struct {
 	ReviewBefore string `json:"review_before,omitempty"`
 	// Tasksはkorylusflowが扱ったタスクを、扱い始めた順に並べたもの。
 	Tasks []TaskRecord `json:"tasks,omitempty"`
-	// Walkthroughは、処理の流れのステップで受け取り、まだ作業報告書の版に記録していない
-	// 処理の流れの場所か書かなかった理由。次に作る版の記録に移す。
-	Walkthrough *Walkthrough `json:"walkthrough,omitempty"`
-	// Reportsは作った作業報告書の版を、作った順に並べたもの。
-	Reports []ReportRecord `json:"reports,omitempty"`
+	// Reportsは作業報告書のステップで受け取った記録を、回の順に並べたもの。
+	Reports []ReportRound `json:"report_rounds,omitempty"`
 	// Pendingは完了を確認済みのステップ。次のブランチの準備や履歴の記録中に
 	// 落ちても、完了条件を確かめ直さずに続きを実行するために残す。
 	// Stepが空なら次のステップは未選択で、入っていれば準備済み。
@@ -217,24 +220,40 @@ type VerificationItem struct {
 	Expected string   `json:"expected"`
 }
 
-// ReportRecordは作業報告書1版の記録。
-type ReportRecord struct {
-	Version int `json:"version"`
-	// Eventsは、この版に含めた所要時間の記録の件数。これより後に記録が増えたら、
-	// 計画書の最後で次の版を作る。
+// ReportRoundは作業報告書1回分の記録。korylusflowは作業報告書の本文を読まず、
+// 場所と処理の流れを書かなかった理由だけを持つ。
+type ReportRound struct {
+	// Numberは何回目の作業報告書か (1始まり)。
+	Number int `json:"number"`
+	// Eventsは、この回に含めた所要時間の記録の件数。これより後に記録が増えたら、
+	// 計画書の最後で次の回の作業報告書を書く。
 	Events int       `json:"events"`
 	At     time.Time `json:"at"`
-	// Walkthroughは、この版を作る前に書いた処理の流れの場所か書かなかった理由。
-	// 処理の流れのステップを足す前に作った版ではnil。
-	Walkthrough *Walkthrough `json:"walkthrough,omitempty"`
+	// Locationは作業報告書のページのURL。Markdownの作業報告書を作っていた回
+	// (以前の形式の状態から読み替えた回) では空。
+	Location string `json:"location,omitempty"`
+	// WalkthroughSkippedは、作業報告書に処理の流れを書かなかった理由。書いたときは空。
+	WalkthroughSkipped string `json:"walkthrough_skipped,omitempty"`
 }
 
-// Walkthroughは処理の流れの場所か、書かなかった理由。どちらか一方だけを持つ。
-type Walkthrough struct {
-	// Locationは処理の流れの場所 (`https://` で始まるURLか、プロジェクトのルートからの相対パス)。
-	Location string `json:"location,omitempty"`
-	// Skippedは処理の流れを書かなかった理由。
-	Skipped string `json:"skipped,omitempty"`
+// LatestReportは、最新の回の作業報告書のURLを返す。まだ書いていないか、最新の回が
+// Markdownの作業報告書だったときは空文字。
+func (s *State) LatestReport() string {
+	if n := len(s.Reports); n > 0 {
+		return s.Reports[n-1].Location
+	}
+	return ""
+}
+
+// PreviousReportは、これまでの回で書いた作業報告書のURLのうち最新のものを返す。
+// 無ければ空文字。次の回で、新しく作らずに同じページを更新してもらうために使う。
+func (s *State) PreviousReport() string {
+	for i := len(s.Reports) - 1; i >= 0; i-- {
+		if s.Reports[i].Location != "" {
+			return s.Reports[i].Location
+		}
+	}
+	return ""
 }
 
 // TaskRecordはタスク番号idの記録を返す。まだ扱っていなければnilを返す。
@@ -312,11 +331,42 @@ func (d Dir) Load() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	var s State
-	if err := json.Unmarshal(b, &s); err != nil {
+	var raw struct {
+		State
+		// LegacyReportsは、Markdownの作業報告書を作っていたときの版の記録。
+		LegacyReports []legacyReport `json:"reports"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("%s を読み取れません: %w", path, err)
 	}
+	s := raw.State
+	upgrade(&s, raw.LegacyReports)
 	return &s, nil
+}
+
+// legacyReportは、Markdownの作業報告書を作っていたときの版1つの記録。
+type legacyReport struct {
+	Version int       `json:"version"`
+	Events  int       `json:"events"`
+	At      time.Time `json:"at"`
+}
+
+// upgradeは、以前の形式で書いた状態sを今の形式に読み替える。
+// Markdownの作業報告書の版は、場所を持たない回として引き継ぐ。次の回でページを新しく
+// 作ってもらうためである。版に移していなかった処理の流れの記録は、引き継がずに捨てる。
+// 計画書の最後で作業報告書のステップから書き直してもらう。
+func upgrade(s *State, legacy []legacyReport) {
+	if len(s.Reports) == 0 {
+		for _, r := range legacy {
+			s.Reports = append(s.Reports, ReportRound{Number: r.Version, Events: r.Events, At: r.At})
+		}
+	}
+	if s.Step == stepWalkthrough {
+		s.Step = StepReport
+	}
+	if s.Pending != nil && s.Pending.Step == stepWalkthrough {
+		s.Pending.Step = StepReport
+	}
 }
 
 // Saveは状態ファイルを書く。UpdatedAtにはnowを入れる。
@@ -327,20 +377,6 @@ func (d Dir) Save(s *State, now time.Time) error {
 		return err
 	}
 	return d.write(stateFile, append(b, '\n'))
-}
-
-// ReportPathは版vの作業報告書のパスを返す。
-func (d Dir) ReportPath(v int) string {
-	return filepath.Join(d.path, reportName(v))
-}
-
-// WriteReportは版vの作業報告書を書く。
-func (d Dir) WriteReport(v int, data []byte) error {
-	return d.write(reportName(v), data)
-}
-
-func reportName(v int) string {
-	return fmt.Sprintf("report-%d.md", v)
 }
 
 // writeはnameへdataを書く。書きかけのファイルが残らないよう、同じ

@@ -1,7 +1,7 @@
 // Package planは作業計画書のタスクリストを読み取る。
 //
 // 読み取るのは「## タスクリスト」節のトップレベルのタスク行と、その下の
-// `**担当**:` / `**保護領域**:` / `**想定行数**:` / `**対応する確認項目**:` の行と、最初の節より前の
+// `**担当**:` / `**保護領域**:` / `**想定行数**:` の行と、最初の節より前の
 // `**計画書名**:` の行に限る。
 // HTMLコメントとコードブロックの中は、書式の例を誤って拾わないよう読み飛ばす。
 package plan
@@ -39,8 +39,6 @@ var (
 	rePart = regexp.MustCompile(`([^\s(+]+?)\s*([0-9,]+)行`)
 	// reFeedbackPhaseはフィードバック対応のフェーズ番号にマッチする。
 	reFeedbackPhase = regexp.MustCompile(`^` + feedbackPrefix + `([0-9]+)$`)
-	// reItemRefは作業報告書の確認項目への参照 (第N版 #M) にマッチする。
-	reItemRef = regexp.MustCompile(`第\s*([0-9]+)\s*版\s*#([0-9]+)`)
 	// reNameLineは最初の節より前の `**計画書名**:` の行にマッチし、値を取り出す。
 	reNameLine = regexp.MustCompile(`^\*\*計画書名\*\*:\s*(.*?)\s*$`)
 	// reNameは計画書名に使える値にマッチする。ブランチ名とパスの一部になるため、
@@ -72,9 +70,6 @@ type Task struct {
 	Protected []Declaration
 	// Linesは想定行数。記載が無ければゼロ値。
 	Lines Size
-	// Verifiesは、フィードバック対応のタスクが対応する作業報告書の確認項目。
-	// 全体へのコメントから起こしたタスクは項目を参照しないため空になる。
-	Verifies []ItemRef
 	// LineNoはタスク行の行番号 (1始まり)。
 	LineNo int
 }
@@ -85,12 +80,6 @@ type Declaration struct {
 	Name string
 	// Noteは括弧内に書かれた触れる内容。無ければ空文字。
 	Note string
-}
-
-// ItemRefは作業報告書の確認項目への参照 (第Version版 #Number)。
-type ItemRef struct {
-	Version int
-	Number  int
 }
 
 // Sizeは想定行数。
@@ -258,10 +247,6 @@ func Parse(src string) (*Plan, error) {
 				errs = append(errs, fmt.Errorf("%d行目: タスク %s の想定行数: %w", lineNo, cur.ID, err))
 			}
 			cur.Lines = size
-		case "対応する確認項目":
-			for _, rm := range reItemRef.FindAllStringSubmatch(m[2], -1) {
-				cur.Verifies = append(cur.Verifies, ItemRef{Version: atoi(rm[1]), Number: atoi(rm[2])})
-			}
 		}
 	}
 
