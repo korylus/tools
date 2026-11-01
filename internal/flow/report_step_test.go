@@ -417,6 +417,11 @@ func TestFlowReportReviewAskHuman(t *testing.T) {
 	if r := fx.load(t).Reports[0]; len(r.Deferred) != 1 || r.Deferred[0].Choice != "現状維持" {
 		t.Errorf("先送りした指摘 = %+v", r.Deferred)
 	}
+	out := fx.facts(t)
+	want := "| 作業報告書 (1回目) | 3. 依存の向き | 現状維持 | `" + doc + "` |"
+	if !strings.Contains(out, want) {
+		t.Errorf("先送りした指摘の出力に %q が無い:\n%s", want, out)
+	}
 }
 
 func TestFlowReportReviewLimit(t *testing.T) {

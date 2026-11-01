@@ -99,10 +99,10 @@ func TestBuild(t *testing.T) {
 		"| `/repo` | `demo-1-1` | `develop` | 1-1 |\n",
 		"## タスクごとの変更\n\n変更行数は、元のブランチからタスクのブランチまでの追加と削除の合計です。\n\n",
 		"| 1-1 [/repo/go] 状態を作る | `demo-1-1` (元: `develop`) | テスト以外55行・テスト30行 | 約100行 (実装60行 + テスト40行) | Comment |\n",
-		`| 1-1 | 名前\|を改める | 後続タスクに積む (推奨) |`,
+		`| タスク 1-1 | 名前\|を改める | 後続タスクに積む (推奨) |`,
 		"- 宣言: モジュール間の依存関係 (flowからplanへの依存)\n",
 		"- 差分を見るコマンド: `git -C /repo diff develop...demo-1-1`\n",
-		"コードを変更しない方針を選んだ指摘です。\n",
+		"変更しない方針を選んだ指摘です。\n",
 	)
 	// 動作確認の項目は作業報告書の材料で、事実としては出さない。
 	for _, unwanted := range []string{"1-3", "## 人を待った履歴", "## 所要時間", "状態をどこに置くか?", "a.png", "コミット:", "動作確認", "statusを表示できる", "全体へのコメント"} {
@@ -110,6 +110,33 @@ func TestBuild(t *testing.T) {
 			t.Errorf("出力に %q がある:\n%s", unwanted, out)
 		}
 	}
+}
+
+func TestBuildDeferredReportFindings(t *testing.T) {
+	t.Parallel()
+
+	in := newInput(t, testPlan)
+	in.State.Reports = []state.ReportRound{
+		{
+			Number: 1,
+			ReviewTrail: state.ReviewTrail{Deferred: []state.DeferredFinding{{
+				Doc: "docs/private/reviews/demo-report-001.md", Title: "処理|の説明", Choice: "後続タスクに積む (推奨)",
+			}}},
+		},
+		{
+			Number: 2,
+			ReviewTrail: state.ReviewTrail{Deferred: []state.DeferredFinding{{
+				Doc: "docs/private/reviews/demo-report-002.md", Title: "確認の手順", Choice: "現状維持",
+			}}},
+		},
+	}
+	out := string(Build(in))
+	assertContains(t, out,
+		"| 対象 | 指摘 | 選んだ対応方針 | レビュードキュメント |",
+		`| タスク 1-1 | 名前\|を改める | 後続タスクに積む (推奨) |`,
+		`| 作業報告書 (1回目) | 処理\|の説明 | 後続タスクに積む (推奨) | `+"`docs/private/reviews/demo-report-001.md` |",
+		"| 作業報告書 (2回目) | 確認の手順 | 現状維持 | `docs/private/reviews/demo-report-002.md` |",
+	)
 }
 
 func TestBuildWithoutTasks(t *testing.T) {

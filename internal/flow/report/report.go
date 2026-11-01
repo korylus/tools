@@ -270,15 +270,20 @@ func (b *builder) deferred() {
 	var rows []string
 	for _, rec := range b.records {
 		for _, d := range rec.Deferred {
-			rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s |\n", rec.ID, cell(d.Title), cell(d.Choice), code(d.Doc)))
+			rows = append(rows, fmt.Sprintf("| タスク %s | %s | %s | %s |\n", rec.ID, cell(d.Title), cell(d.Choice), code(d.Doc)))
+		}
+	}
+	for _, r := range b.in.State.Reports {
+		for _, d := range r.Deferred {
+			rows = append(rows, fmt.Sprintf("| 作業報告書 (%d回目) | %s | %s | %s |\n", r.Number, cell(d.Title), cell(d.Choice), code(d.Doc)))
 		}
 	}
 	if len(rows) == 0 {
 		b.f("なし\n\n")
 		return
 	}
-	b.f("コードを変更しない方針を選んだ指摘です。\n後続のタスクにするかは人が決めます。\n\n")
-	b.f("| タスク | 指摘 | 選んだ対応方針 | レビュードキュメント |\n| --- | --- | --- | --- |\n%s\n", strings.Join(rows, ""))
+	b.f("変更しない方針を選んだ指摘です。\n後続のタスクにするかは人が決めます。\n\n")
+	b.f("| 対象 | 指摘 | 選んだ対応方針 | レビュードキュメント |\n| --- | --- | --- | --- |\n%s\n", strings.Join(rows, ""))
 }
 
 func (b *builder) protected() {
