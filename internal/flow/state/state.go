@@ -355,6 +355,7 @@ type legacyReport struct {
 // Markdownの作業報告書の版は、場所を持たない回として引き継ぐ。次の回でページを新しく
 // 作ってもらうためである。版に移していなかった処理の流れの記録は、引き継がずに捨てる。
 // 計画書の最後で作業報告書のステップから書き直してもらう。
+// Pending.Stepは完了履歴の重複判定に使う識別子なので、値を変えない。
 func upgrade(s *State, legacy []legacyReport) {
 	if len(s.Reports) == 0 {
 		for _, r := range legacy {
@@ -363,9 +364,6 @@ func upgrade(s *State, legacy []legacyReport) {
 	}
 	if s.Step == stepWalkthrough {
 		s.Step = StepReport
-	}
-	if s.Pending != nil && s.Pending.Step == stepWalkthrough {
-		s.Pending.Step = StepReport
 	}
 }
 

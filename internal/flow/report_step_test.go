@@ -186,6 +186,73 @@ func TestFlowReportLegacyState(t *testing.T) {
 	}
 }
 
+func TestFlowReportLegacyPending(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		appended bool
+	}{
+		{name: "履歴の追記前"},
+		{name: "履歴の追記後", appended: true},
+	}
+	for _, tt := range cases {
+		for _, entry := range []string{"wait", "done"} {
+			t.Run(tt.name+"/"+entry, func(t *testing.T) {
+				t.Parallel()
+
+				fx := newFixture(t, "- [x] **1-1**: [shimbaco] 確かめる")
+				event := state.Event{
+					Step: state.Step("walkthrough"), Role: state.RoleImplementer,
+					Started: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+					Ended:   time.Date(2026, 10, 1, 0, 1, 0, 0, time.UTC),
+				}
+				if tt.appended {
+					if err := fx.flow.Dir.AppendEvent(event); err != nil {
+						t.Fatal(err)
+					}
+				}
+				writeFile(t, fx.flow.Dir.Path(), "flow.json", `{"walkthrough":{"skipped":"文書だけのため"},"pending":{"step":"walkthrough","role":"implementer","started":"2026-10-01T00:00:00Z","ended":"2026-10-01T00:01:00Z"},"updated_at":"2026-10-01T00:01:00Z"}`)
+
+				if entry == "wait" {
+					if in := fx.wait(t, state.RoleImplementer); in.Action != ActionReport {
+						t.Fatalf("再開後の指示 = %+v、作業報告書の指示を期待", in)
+					}
+				} else if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+					t.Fatalf("再開時のDoneのエラー = %v", err)
+				}
+
+				events, err := fx.flow.Dir.ReadEvents()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(events) != 1 || events[0] != event {
+					t.Fatalf("移行後の履歴 = %+v、元のwalkthroughの記録1件だけを期待", events)
+				}
+				st, err := fx.flow.Dir.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if st.Pending != nil || st.Step != state.StepReport || len(st.Reports) != 0 {
+					t.Fatalf("移行後の状態 = %+v、未記録の作業報告書のステップを期待", st)
+				}
+
+				fx.writeReport(t)
+				events, err = fx.flow.Dir.ReadEvents()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(events) != 2 || events[0] != event || events[1].Step != state.StepReport {
+					t.Errorf("作業報告書の完了後の履歴 = %+v、旧履歴とreportの履歴を1件ずつ期待", events)
+				}
+				if in := fx.wait(t, state.RoleImplementer); in.Action != ActionFinish || in.Report != testReportURL {
+					t.Errorf("作業報告書の完了後の指示 = %+v、作業報告書のURLを持つ終了を期待", in)
+				}
+			})
+		}
+	}
+}
+
 func TestFlowReportRejectsTrailingJSON(t *testing.T) {
 	t.Parallel()
 

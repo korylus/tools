@@ -28,7 +28,7 @@ const constraintsSection = "合意済みの設計制約"
 // partOrderは想定行数の内訳を並べる順序。
 var partOrder = []string{"実装", "テスト"}
 
-// Inputは作業報告書1版を組み立てる入力。
+// Inputは計画書を進めた結果の事実を組み立てる入力。
 type Input struct {
 	// PlanURLは計画書の指定 (WikinoのページのURL)。
 	PlanURL string
