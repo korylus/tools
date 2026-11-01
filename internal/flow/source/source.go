@@ -1,4 +1,4 @@
-// Package sourceは、作業計画書の読み取り元 (ファイル・Wikinoのページ) を扱う。
+// Package sourceは、作業計画書の読み取り元 (Wikinoのページ) を扱う。
 //
 // 読み取り元の違いはこのパッケージに閉じ込め、呼び出し側は読んだ本文を
 // plan.Parseに渡し、Nameで計画書名を決めるだけにする。
@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -29,13 +28,9 @@ const (
 	wikinoExitRateLimited = 8
 )
 
-var (
-	// rePageURLはWikinoのページのURLにマッチし、スペースとページ番号を取り出す。
-	// スペースは `-` で始まる値をフラグとして読ませないよう、先頭にハイフンを許さない。
-	rePageURL = regexp.MustCompile(`^` + regexp.QuoteMeta(wikinoHost) + `/s/([A-Za-z0-9_][A-Za-z0-9_-]*)/pages/([0-9]+)$`)
-	// reNumberはページ番号だけの指定にマッチする。
-	reNumber = regexp.MustCompile(`^[0-9]+$`)
-)
+// rePageURLはWikinoのページのURLにマッチし、スペースとページ番号を取り出す。
+// スペースは `-` で始まる値をフラグとして読ませないよう、先頭にハイフンを許さない。
+var rePageURL = regexp.MustCompile(`^` + regexp.QuoteMeta(wikinoHost) + `/s/([A-Za-z0-9_][A-Za-z0-9_-]*)/pages/([0-9]+)$`)
 
 // Sourceは計画書の読み取り元。
 type Source interface {
@@ -43,50 +38,23 @@ type Source interface {
 	Read(ctx context.Context) (string, error)
 	// Nameは、読み取った計画書pの計画書名を返す。
 	Name(p *plan.Plan) (string, error)
-	// Stringは、コマンドで受け取ったときの計画書の指定 (パスかURL) を返す。
+	// Stringは、コマンドで受け取ったときの計画書の指定 (URL) を返す。
 	String() string
 }
 
 // Parseは、コマンドで受け取った計画書の指定argから読み取り元を返す。
-// argはプロジェクトのルートからの相対パスか、WikinoのページのURLである。
+// argはWikinoのページのURLである。ページ番号だけの指定はスペースを決められず、
+// パスなどほかの指定は読み取り元が無いため、URLの形を示すエラーにする。
 func Parse(arg string) (Source, error) {
-	if strings.Contains(arg, "://") {
-		m := rePageURL.FindStringSubmatch(arg)
-		if m == nil {
-			return nil, fmt.Errorf("計画書のURL %s を読み取れません。%s/s/<スペース>/pages/<ページ番号> の形で指定してください", arg, wikinoHost)
-		}
-		n, err := strconv.Atoi(m[2])
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("計画書のURL %s のページ番号を読み取れません", arg)
-		}
-		return &Wikino{URL: arg, Space: m[1], Number: n, Run: execRunner("wikino")}, nil
+	m := rePageURL.FindStringSubmatch(arg)
+	if m == nil {
+		return nil, fmt.Errorf("計画書の指定 %s を読み取れません。%s/s/<スペース>/pages/<ページ番号> の形のURLで指定してください", arg, wikinoHost)
 	}
-	// korylusflowは非公開の指示書を読まず、どのスペースのページかを決められない。
-	if reNumber.MatchString(arg) {
-		return nil, fmt.Errorf("ページ番号 %s だけでは計画書を指定できません。%s/s/<スペース>/pages/%s の形のURLで指定してください", arg, wikinoHost, arg)
+	n, err := strconv.Atoi(m[2])
+	if err != nil || n <= 0 {
+		return nil, fmt.Errorf("計画書のURL %s のページ番号を読み取れません", arg)
 	}
-	return File(arg), nil
-}
-
-// Fileは、プロジェクトのルートからの相対パスで指定したファイルの計画書。
-type File string
-
-// Readは計画書のファイルを読む。
-func (f File) Read(context.Context) (string, error) {
-	src, err := os.ReadFile(string(f)) //#nosec G304 G703 -- 人が指定した計画書を読む
-	if err != nil {
-		return "", fmt.Errorf("計画書を読めません: %w", err)
-	}
-	return string(src), nil
-}
-
-// Nameは、計画書名の行が無ければファイル名を、あればファイル名と同じときにその値を返す。
-func (f File) Name(p *plan.Plan) (string, error) {
-	return plan.FileName(string(f), p)
-}
-
-func (f File) String() string {
-	return string(f)
+	return &Wikino{URL: arg, Space: m[1], Number: n, Run: execRunner("wikino")}, nil
 }
 
 // Runnerはwikinoコマンドを引数argsで実行し、標準出力・標準エラー・終了コードを返す。
@@ -139,7 +107,7 @@ func (w *Wikino) runError(kind string, code int, stderr []byte) error {
 	return errors.New(msg)
 }
 
-// Nameは計画書名の行の値を返す。Wikinoのページにはファイル名が無いため、行を必須にする。
+// Nameは計画書名の行の値を返す。計画書名は状態の置き場とブランチ名に使うため、行を必須にする。
 func (w *Wikino) Name(p *plan.Plan) (string, error) {
 	if p.Name == "" {
 		return "", fmt.Errorf("計画書 %s に計画書名の行がありません。最初の「## 」の見出しより前に「**計画書名**: <英小文字・数字・ハイフンの名前>」の行を書いてください", w.URL)

@@ -30,9 +30,9 @@ const verificationExample = `[{"kind":"screen または process","title":"確認
 
 // Instructionはwaitが役割に返す指示。
 type Instruction struct {
-	Action   Action
-	Role     state.Role
-	PlanPath string
+	Action  Action
+	Role    state.Role
+	PlanURL string
 	// TaskとTitleは指示の対象のタスク。終了の指示では空。
 	Task  string
 	Title string
@@ -61,7 +61,7 @@ func (in Instruction) String() string {
 	if in.Role != "" {
 		fmt.Fprintf(&b, "role: %s\n", in.Role)
 	}
-	fmt.Fprintf(&b, "plan: %s\n", in.PlanPath)
+	fmt.Fprintf(&b, "plan: %s\n", in.PlanURL)
 	if in.Task != "" {
 		fmt.Fprintf(&b, "task: %s %s\n", in.Task, in.Title)
 	}
@@ -105,7 +105,7 @@ func (in Instruction) writeImplement(b *strings.Builder) {
 	rec := in.Record
 	steps := []string{
 		fmt.Sprintf("%s を実行する。ブランチ %s はkorylusflowが作成済みのため、ブランチを作らない",
-			code(fmt.Sprintf("/korylus-do-plan-task %s %s repo=%s base=%s", in.PlanPath, in.Task, rec.Repo, rec.Base)), rec.Branch),
+			code(fmt.Sprintf("/korylus-do-plan-task %s %s repo=%s base=%s", in.PlanURL, in.Task, rec.Repo, rec.Base)), rec.Branch),
 		fmt.Sprintf("%s で、タスクの変更を %s にコミットする。docs/private 配下 (計画書・レビュードキュメントなど) はコミットしない", code("/korylus-commit repo="+rec.Repo), rec.Repo),
 		"変更のうち、人が画面や処理で確かめられるものを、動作確認の項目のJSONの配列にまとめる。無ければ " + code("[]") + " にする\n   形: " + verificationExample,
 		fmt.Sprintf("%s を、項目のJSONを標準入力に渡して実行する", code(in.doneCommand())),
@@ -118,7 +118,7 @@ func (in Instruction) writeImplement(b *strings.Builder) {
 
 func (in Instruction) writeWork(b *strings.Builder) {
 	steps := []string{
-		fmt.Sprintf("計画書 %s のタスク %s を読み、書かれた作業を行う。ブランチの作成・切り替えとコミットはしない", in.PlanPath, in.Task),
+		fmt.Sprintf("計画書 %s のタスク %s を読み、書かれた作業を行う。ブランチの作成・切り替えとコミットはしない", in.PlanURL, in.Task),
 		"取り返しのつかない操作 (gitで追跡していないファイルの削除など) は、行う前に対象の一覧を人に示し、その場で了承を得る",
 		"作業の結果 (変えたファイル・作った下書きのURLなど) を人に示し、確かめて計画書のタスクにチェックを付けるよう頼む。チェックは自分で付けない。gitのリポジトリのファイルを変えたときは、人が差分を確かめてコミットするよう伝える",
 		fmt.Sprintf("人がチェックを付けたと答えたら、%s を実行する", code(in.doneCommand())),
@@ -131,7 +131,7 @@ func (in Instruction) writeWork(b *strings.Builder) {
 
 func (in Instruction) writeReview(b *strings.Builder) {
 	rec := in.Record
-	command := fmt.Sprintf("/korylus-review %s %s", rec.Base, in.PlanPath)
+	command := fmt.Sprintf("/korylus-review %s %s", rec.Base, in.PlanURL)
 	if rec.ReviewRepo != "" {
 		command += " repo=" + rec.ReviewRepo
 	}
@@ -205,7 +205,7 @@ func (in Instruction) writeWalkthrough(b *strings.Builder) {
 	}
 	b.WriteString("\n")
 
-	write := fmt.Sprintf("%s を実行し、計画書で実装したものの処理の流れを書く", code("/korylus-write-walkthrough "+in.PlanPath))
+	write := fmt.Sprintf("%s を実行し、計画書で実装したものの処理の流れを書く", code("/korylus-write-walkthrough "+in.PlanURL))
 	if in.PreviousWalkthrough != "" {
 		write += "。前の版の処理の流れを、新しく作らずに上のブランチのコードに合わせて更新する"
 	}
@@ -220,11 +220,11 @@ func (in Instruction) writeWalkthrough(b *strings.Builder) {
 }
 
 func (in Instruction) doneCommand() string {
-	return fmt.Sprintf("korylusflow done %s -role=%s", in.PlanPath, in.Role)
+	return fmt.Sprintf("korylusflow done %s -role=%s", in.PlanURL, in.Role)
 }
 
 func (in Instruction) waitCommand() string {
-	return fmt.Sprintf("korylusflow wait %s -role=%s", in.PlanPath, in.Role)
+	return fmt.Sprintf("korylusflow wait %s -role=%s", in.PlanURL, in.Role)
 }
 
 // writeStepsは手順を番号付きで書く。

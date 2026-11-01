@@ -46,16 +46,16 @@ func TestParsePlanArgs(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
-		wantPath string
+		wantURL  string
 		wantRole string
 		wantErr  error
 	}{
-		{name: "フラグをパスの後ろに書ける", args: []string{"plan.md", "-role=implementer"}, wantPath: "plan.md", wantRole: "implementer"},
-		{name: "フラグをパスの前に書ける", args: []string{"-role=implementer", "plan.md"}, wantPath: "plan.md", wantRole: "implementer"},
-		{name: "フラグは省略できる", args: []string{"plan.md"}, wantPath: "plan.md"},
-		{name: "パスが無いとエラー", args: []string{"-role=implementer"}, wantErr: errUsage},
-		{name: "パスが2つあるとエラー", args: []string{"a.md", "b.md"}, wantErr: errUsage},
-		{name: "-hはflag.ErrHelp", args: []string{"plan.md", "-h"}, wantErr: flag.ErrHelp},
+		{name: "フラグを計画書の指定の後ろに書ける", args: []string{"https://wikino.app/s/shimbaco/pages/1", "-role=implementer"}, wantURL: "https://wikino.app/s/shimbaco/pages/1", wantRole: "implementer"},
+		{name: "フラグを計画書の指定の前に書ける", args: []string{"-role=implementer", "https://wikino.app/s/shimbaco/pages/1"}, wantURL: "https://wikino.app/s/shimbaco/pages/1", wantRole: "implementer"},
+		{name: "フラグは省略できる", args: []string{"https://wikino.app/s/shimbaco/pages/1"}, wantURL: "https://wikino.app/s/shimbaco/pages/1"},
+		{name: "計画書の指定が無いとエラー", args: []string{"-role=implementer"}, wantErr: errUsage},
+		{name: "計画書の指定が2つあるとエラー", args: []string{"https://wikino.app/s/shimbaco/pages/1", "https://wikino.app/s/shimbaco/pages/2"}, wantErr: errUsage},
+		{name: "-hはflag.ErrHelp", args: []string{"https://wikino.app/s/shimbaco/pages/1", "-h"}, wantErr: flag.ErrHelp},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -64,7 +64,7 @@ func TestParsePlanArgs(t *testing.T) {
 			flags.SetOutput(io.Discard)
 			role := flags.String("role", "", "")
 
-			path, err := parsePlanArgs(flags, tt.args)
+			planURL, err := parsePlanArgs(flags, tt.args)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("parsePlanArgsのエラー = %v、期待値 = %v", err, tt.wantErr)
@@ -74,8 +74,8 @@ func TestParsePlanArgs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parsePlanArgsのエラー = %v", err)
 			}
-			if path != tt.wantPath || *role != tt.wantRole {
-				t.Errorf("パス = %q、role = %q、期待値 = %q, %q", path, *role, tt.wantPath, tt.wantRole)
+			if planURL != tt.wantURL || *role != tt.wantRole {
+				t.Errorf("計画書の指定 = %q、role = %q、期待値 = %q, %q", planURL, *role, tt.wantURL, tt.wantRole)
 			}
 		})
 	}

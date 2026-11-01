@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/korylus/tools/internal/flow/source/sourcetest"
 )
 
 func TestWait(t *testing.T) {
@@ -15,7 +17,7 @@ func TestWait(t *testing.T) {
 	t.Run("役割が無いとエラー", func(t *testing.T) {
 		t.Parallel()
 		var stdout, stderr bytes.Buffer
-		if code := wait(context.Background(), []string{writePlan(t)}, t.TempDir(), &stdout, &stderr); code != exitError {
+		if code := wait(context.Background(), []string{writePlan(t)}, t.TempDir(), sourcetest.Parse, &stdout, &stderr); code != exitError {
 			t.Errorf("終了コード = %d、期待値 = %d", code, exitError)
 		}
 		assertContains(t, stderr.String(), "不明な役割")
@@ -24,11 +26,11 @@ func TestWait(t *testing.T) {
 	t.Run("すべて完了していれば終了の指示を返す", func(t *testing.T) {
 		t.Parallel()
 		planPath := filepath.Join(t.TempDir(), "done.md")
-		if err := os.WriteFile(planPath, []byte("## タスクリスト\n\n- [x] **1-1**: [shimbaco] 済み\n"), 0o600); err != nil {
+		if err := os.WriteFile(planPath, []byte("**計画書名**: done\n\n## タスクリスト\n\n- [x] **1-1**: [shimbaco] 済み\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		var stdout, stderr bytes.Buffer
-		code := wait(context.Background(), []string{planPath, "-role=reviewer-claude", "-timeout=1s"}, t.TempDir(), &stdout, &stderr)
+		code := wait(context.Background(), []string{planPath, "-role=reviewer-claude", "-timeout=1s"}, t.TempDir(), sourcetest.Parse, &stdout, &stderr)
 		if code != exitOK {
 			t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 		}
@@ -41,14 +43,14 @@ func TestWait(t *testing.T) {
 		t.Parallel()
 		planPath := writeHumanPlan(t)
 		var stdout, stderr bytes.Buffer
-		code := wait(context.Background(), []string{planPath, "-role=reviewer-codex", "-timeout=50ms"}, t.TempDir(), &stdout, &stderr)
+		code := wait(context.Background(), []string{planPath, "-role=reviewer-codex", "-timeout=50ms"}, t.TempDir(), sourcetest.Parse, &stdout, &stderr)
 		if code != exitOK {
 			t.Fatalf("終了コード = %d、標準エラー = %s", code, stderr.String())
 		}
 		if !strings.HasPrefix(stdout.String(), "action: wait\n") {
 			t.Errorf("標準出力 = %q、action: wait で始まることを期待", stdout.String())
 		}
-		assertContains(t, stdout.String(), "korylusflow wait "+planPath+" -role=reviewer-codex")
+		assertContains(t, stdout.String(), "korylusflow wait "+sourcetest.URL+" -role=reviewer-codex")
 	})
 
 	t.Run("中断されたら終了コード1を返す", func(t *testing.T) {
@@ -56,7 +58,7 @@ func TestWait(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		var stdout, stderr bytes.Buffer
-		if code := wait(ctx, []string{writeHumanPlan(t), "-role=implementer"}, t.TempDir(), &stdout, &stderr); code != exitError {
+		if code := wait(ctx, []string{writeHumanPlan(t), "-role=implementer"}, t.TempDir(), sourcetest.Parse, &stdout, &stderr); code != exitError {
 			t.Errorf("終了コード = %d、期待値 = %d", code, exitError)
 		}
 		assertContains(t, stderr.String(), "中断しました")
@@ -71,7 +73,7 @@ func TestWait(t *testing.T) {
 func writeHumanPlan(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "human.md")
-	if err := os.WriteFile(path, []byte("## タスクリスト\n\n- [ ] **1-1**: [shimbaco] タグを付ける\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("**計画書名**: human\n\n## タスクリスト\n\n- [ ] **1-1**: [shimbaco] タグを付ける\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -83,7 +85,7 @@ func TestDone(t *testing.T) {
 	t.Run("まだ始めていなければ受け付けない", func(t *testing.T) {
 		t.Parallel()
 		var stdout, stderr bytes.Buffer
-		code := done(context.Background(), []string{writePlan(t), "-role=implementer"}, t.TempDir(), strings.NewReader("[]"), &stdout, &stderr)
+		code := done(context.Background(), []string{writePlan(t), "-role=implementer"}, t.TempDir(), sourcetest.Parse, strings.NewReader("[]"), &stdout, &stderr)
 		if code != exitRejected {
 			t.Errorf("終了コード = %d、期待値 = %d", code, exitRejected)
 		}
@@ -93,7 +95,7 @@ func TestDone(t *testing.T) {
 	t.Run("役割が無いとエラー", func(t *testing.T) {
 		t.Parallel()
 		var stdout, stderr bytes.Buffer
-		code := done(context.Background(), []string{writePlan(t)}, t.TempDir(), strings.NewReader(""), &stdout, &stderr)
+		code := done(context.Background(), []string{writePlan(t)}, t.TempDir(), sourcetest.Parse, strings.NewReader(""), &stdout, &stderr)
 		if code != exitError {
 			t.Errorf("終了コード = %d、期待値 = %d", code, exitError)
 		}
@@ -105,12 +107,12 @@ func TestDoneReviewLimitFlag(t *testing.T) {
 	planPath := writeHumanPlan(t)
 	stateRoot := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := wait(context.Background(), []string{planPath, "-role=implementer"}, stateRoot, &stdout, &stderr); code != exitOK {
+	if code := wait(context.Background(), []string{planPath, "-role=implementer"}, stateRoot, sourcetest.Parse, &stdout, &stderr); code != exitOK {
 		t.Fatal(stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code := done(context.Background(), []string{planPath, "-role=implementer", "-review-limit=6"}, stateRoot, strings.NewReader(""), &stdout, &stderr)
+	code := done(context.Background(), []string{planPath, "-role=implementer", "-review-limit=6"}, stateRoot, sourcetest.Parse, strings.NewReader(""), &stdout, &stderr)
 	if code != exitRejected {
 		t.Fatalf("終了コード = %d、期待値 = %d (%s)", code, exitRejected, stderr.String())
 	}

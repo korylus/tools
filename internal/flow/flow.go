@@ -48,9 +48,9 @@ func reject(format string, args ...any) error {
 
 // Flowは1つの計画書の状態遷移。
 type Flow struct {
-	// PlanPathは計画書の指定 (プロジェクトのルートからのパスか、WikinoのページのURL)。
+	// PlanURLは計画書の指定 (WikinoのページのURL)。
 	// 指示の中のコマンドにもそのまま使う。
-	PlanPath string
+	PlanURL string
 	// Sourceは計画書の読み取り元。
 	Source source.Source
 	// Nameは計画書名。状態の置き場・ブランチ名・作業報告書の見出しに使う。
@@ -64,19 +64,10 @@ type Flow struct {
 	PollInterval time.Duration
 }
 
-// Newは計画書の指定planArg (パスかURL) の状態遷移を、stateRootの下の状態ディレクトリで
-// 扱うFlowを返す。プロジェクトのルートは作業ディレクトリとする。
-func New(ctx context.Context, planArg, stateRoot string) (*Flow, error) {
-	src, err := source.Parse(planArg)
-	if err != nil {
-		return nil, err
-	}
-	return open(ctx, src, stateRoot)
-}
-
-// openは読み取り元srcの計画書の状態遷移を扱うFlowを返す。状態の置き場を計画書名で
-// 決めるため、計画書を1回読む。
-func open(ctx context.Context, src source.Source, stateRoot string) (*Flow, error) {
+// Newは読み取り元srcの計画書の状態遷移を、stateRootの下の状態ディレクトリで扱うFlowを
+// 返す。プロジェクトのルートは作業ディレクトリとする。状態の置き場を計画書名で決めるため、
+// 計画書を1回読む。
+func New(ctx context.Context, src source.Source, stateRoot string) (*Flow, error) {
 	p, err := readPlan(ctx, src)
 	if err != nil {
 		return nil, err
@@ -86,7 +77,7 @@ func open(ctx context.Context, src source.Source, stateRoot string) (*Flow, erro
 		return nil, err
 	}
 	return &Flow{
-		PlanPath:     src.String(),
+		PlanURL:      src.String(),
 		Source:       src,
 		Name:         name,
 		Root:         ".",
@@ -111,7 +102,7 @@ func (f *Flow) Wait(ctx context.Context, role state.Role, timeout time.Duration)
 			return Instruction{}, err
 		}
 		if timeout > 0 && errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
-			return Instruction{Action: ActionWait, Role: role, PlanPath: f.PlanPath}, nil
+			return Instruction{Action: ActionWait, Role: role, PlanURL: f.PlanURL}, nil
 		}
 		if err != nil || ok {
 			return in, err
@@ -168,12 +159,12 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	}
 
 	if st.Step == "" {
-		return Instruction{Action: ActionFinish, Role: role, PlanPath: f.PlanPath, Report: f.latestReport(st)}, true, nil
+		return Instruction{Action: ActionFinish, Role: role, PlanURL: f.PlanURL, Report: f.latestReport(st)}, true, nil
 	}
 	if st.Role != role {
 		return Instruction{}, false, nil
 	}
-	in := Instruction{Role: role, PlanPath: f.PlanPath, Task: st.Task, Record: st.TaskRecord(st.Task), Ask: st.Ask}
+	in := Instruction{Role: role, PlanURL: f.PlanURL, Task: st.Task, Record: st.TaskRecord(st.Task), Ask: st.Ask}
 	if t, ok := findTask(p, st.Task); ok {
 		in.Title = t.Title
 	}

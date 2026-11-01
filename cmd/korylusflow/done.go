@@ -9,19 +9,20 @@ import (
 	"os"
 
 	"github.com/korylus/tools/internal/flow"
+	"github.com/korylus/tools/internal/flow/source"
 	"github.com/korylus/tools/internal/flow/state"
 )
 
 // runDoneはdoneサブコマンドのエントリポイント。
 func runDone(args []string, stdout, stderr io.Writer) int {
-	return done(context.Background(), args, state.Root, os.Stdin, stdout, stderr)
+	return done(context.Background(), args, state.Root, source.Parse, os.Stdin, stdout, stderr)
 }
 
 // doneは役割が進めているステップの完了を記録する。
 // ブランチを作る実装タスクでは、stdinから動作確認の項目をJSONの配列で読む。
 // 処理の流れのステップでは、stdinから処理の流れの場所か書かなかった理由をJSONで読む。
 // [implementer] のタスクでは、計画書のチェックを確かめ、stdinは読まない。
-func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader, stdout, stderr io.Writer) int {
+func done(ctx context.Context, args []string, stateRoot string, parse parseSource, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("done", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	roleFlag := flags.String("role", "", "役割 (implementer / reviewer-codex / reviewer-claude)")
@@ -30,7 +31,7 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 		fmt.Fprintln(stderr, "使い方: korylusflow done <計画書> -role=<役割> [-review-limit=<新しい上限>] [< 動作確認の項目か処理の流れのJSON]")
 		flags.PrintDefaults()
 	}
-	planPath, err := parsePlanArgs(flags, args)
+	planURL, err := parsePlanArgs(flags, args)
 	if err != nil {
 		return parseFailed(flags, err)
 	}
@@ -40,7 +41,7 @@ func done(ctx context.Context, args []string, stateRoot string, stdin io.Reader,
 		return exitError
 	}
 
-	f, err := flow.New(ctx, planPath, stateRoot)
+	f, err := openFlow(ctx, parse, planURL, stateRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "エラー: %v\n", err)
 		return exitError

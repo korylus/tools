@@ -71,7 +71,8 @@ korylusflow report <plan>
 ```
 
 Run every subcommand at the project root.
-Specify the plan by its path relative to that root or by the URL of a Wikino page (`https://wikino.app/s/<space>/pages/<page number>`) (see "[Plan names and plans on Wikino pages](#plan-names-and-plans-on-wikino-pages)").
+Specify the plan by the URL of a Wikino page (`https://wikino.app/s/<space>/pages/<page number>`).
+A path or a page number alone is not accepted (see "[Plan names and plans on Wikino pages](#plan-names-and-plans-on-wikino-pages)").
 The role is one of `implementer`, `reviewer-codex` (reviewer (Codex)), and `reviewer-claude` (reviewer (Claude Code)).
 
 | Subcommand | Role                                                                                                                                                                                                                                                   |
@@ -103,9 +104,7 @@ Use only lowercase letters, digits, and hyphens between them in the value.
 **計画書名**: feature-name
 ```
 
-For a plan in a file, omitting this line makes it use the file name (without the extension).
-When you write the line, use the same value as the file name.
-For a plan on a Wikino page, this line is required.
+This line is required.
 Changing the plan name in the middle of the loop moves the state location, and the loop can no longer continue from where it left off.
 
 A plan on a Wikino page is read with the `wikino` command of the [Wikino CLI](https://github.com/wikinoapp/wikino/tree/main/cli): its draft if there is one, otherwise the page.

@@ -299,23 +299,6 @@ func TestParse_NameErrors(t *testing.T) {
 	}
 }
 
-func TestFileName(t *testing.T) {
-	t.Parallel()
-	const path = "docs/private/plans/1_doing/koryluspilot.md"
-
-	for _, name := range []string{"", "koryluspilot"} {
-		got, err := FileName(path, &Plan{Name: name})
-		if err != nil || got != "koryluspilot" {
-			t.Errorf("計画書名の行 %q のFileName() = %q, %v、期待値 = %q", name, got, err, "koryluspilot")
-		}
-	}
-
-	_, err := FileName(path, &Plan{Name: "other"})
-	if err == nil || !strings.Contains(err.Error(), "計画書名 other がファイル名 koryluspilot と違います") {
-		t.Errorf("食い違うときのFileName() のエラー = %v", err)
-	}
-}
-
 func TestParse_CodeFences(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, opening, body, closing string }{

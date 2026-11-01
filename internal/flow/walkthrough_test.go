@@ -98,12 +98,12 @@ func TestFlowWalkthroughAfterAddedTask(t *testing.T) {
 	}
 
 	// 処理の流れを書いている間に人がタスクを足すと、書いた処理の流れでは作業報告書を作らない。
-	src, err := os.ReadFile(fx.flow.PlanPath)
+	src, err := os.ReadFile(fx.planFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	src = append(src, []byte("- [ ] **1-2**: [shimbaco] 確かめる\n")...)
-	if err := os.WriteFile(fx.flow.PlanPath, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+	if err := os.WriteFile(fx.planFile, src, 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
 		t.Fatal(err)
 	}
 	if _, err := fx.done(state.RoleImplementer, `{"skipped":"足す前の理由"}`); err != nil {

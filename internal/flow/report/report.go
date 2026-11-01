@@ -31,8 +31,8 @@ var partOrder = []string{"実装", "テスト"}
 
 // Inputは作業報告書1版を組み立てる入力。
 type Input struct {
-	// PlanPathは計画書の指定 (プロジェクトのルートからの相対パスか、WikinoのページのURL)。
-	PlanPath string
+	// PlanURLは計画書の指定 (WikinoのページのURL)。
+	PlanURL string
 	// Nameは計画書名。見出しに使う。
 	Name string
 	// Planは計画書を読み取ったもの。
@@ -116,7 +116,7 @@ func (b *builder) f(format string, args ...any) {
 func (b *builder) overview() {
 	in := b.in
 	b.f("# 作業報告書 第%d版: %s\n\n## 概要\n\n", in.Version, in.Name)
-	b.f("- 計画書: %s\n- 作成: %s\n", code(in.PlanPath), in.Now.Format(timeLayout))
+	b.f("- 計画書: %s\n- 作成: %s\n", code(in.PlanURL), in.Now.Format(timeLayout))
 	if len(in.Events) > 0 {
 		b.f("- 計画書の開始: %s\n", earliest(in.Events).Format(timeLayout))
 	}

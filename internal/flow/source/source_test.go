@@ -15,13 +15,8 @@ import (
 func TestParse(t *testing.T) {
 	t.Parallel()
 
-	src, err := Parse("docs/private/plans/1_doing/demo.md")
-	if err != nil || src != File("docs/private/plans/1_doing/demo.md") {
-		t.Errorf("パスのParse() = %#v, %v", src, err)
-	}
-
 	const url = "https://wikino.app/s/shimbaco_2/pages/1214"
-	src, err = Parse(url)
+	src, err := Parse(url)
 	if err != nil {
 		t.Fatalf("URLのParse() のエラー = %v", err)
 	}
@@ -34,7 +29,8 @@ func TestParse(t *testing.T) {
 func TestParseErrors(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, arg, want string }{
-		{"ページ番号だけ", "1214", "ページ番号 1214 だけでは計画書を指定できません"},
+		{"ページ番号だけ", "1214", "計画書の指定 1214 を読み取れません"},
+		{"パス", "docs/private/plans/1_doing/demo.md", "の形のURLで指定してください"},
 		{"httpのURL", "http://wikino.app/s/shimbaco/pages/1", "を読み取れません"},
 		{"別のホスト", "https://example.com/s/shimbaco/pages/1", "を読み取れません"},
 		{"ハイフンで始まるスペース", "https://wikino.app/s/-x/pages/1", "を読み取れません"},
@@ -49,25 +45,6 @@ func TestParseErrors(t *testing.T) {
 				t.Errorf("Parse(%q) のエラー = %v、期待値 = %q を含むエラー", tt.arg, err, tt.want)
 			}
 		})
-	}
-}
-
-func TestFile(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "demo.md")
-	if err := os.WriteFile(path, []byte("# 計画書\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f := File(path)
-	if got, err := f.Read(context.Background()); err != nil || got != "# 計画書\n" {
-		t.Errorf("Read() = %q, %v", got, err)
-	}
-	if got, err := f.Name(&plan.Plan{}); err != nil || got != "demo" {
-		t.Errorf("Name() = %q, %v、期待値 = demo", got, err)
-	}
-	if _, err := File(filepath.Join(t.TempDir(), "none.md")).Read(context.Background()); err == nil || !strings.Contains(err.Error(), "計画書を読めません") {
-		t.Errorf("無いファイルのRead() のエラー = %v", err)
 	}
 }
 

@@ -57,7 +57,7 @@ func newInput(t *testing.T, src string) Input {
 		},
 	}}}
 	return Input{
-		PlanPath: "docs/private/plans/1_doing/demo.md", Name: "demo", Plan: p, Version: 1, Now: at(120), State: st,
+		PlanURL: "https://wikino.app/s/shimbaco/pages/12", Name: "demo", Plan: p, Version: 1, Now: at(120), State: st,
 		Events: []state.Event{
 			{Task: "1-1", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(0), Ended: at(30)},
 			{Task: "1-1", Step: state.StepReview, Role: state.RoleReviewerCodex, Started: at(30), Ended: at(50)},
@@ -106,7 +106,7 @@ func TestBuild(t *testing.T) {
 	out := string(Build(newInput(t, testPlan)))
 	assertContains(t, out,
 		"# 作業報告書 第1版: demo\n",
-		"- 計画書: `docs/private/plans/1_doing/demo.md`\n",
+		"- 計画書: `https://wikino.app/s/shimbaco/pages/12`\n",
 		"- 計画書の開始: 2026-10-22 09:00 +00:00\n",
 		"### マージするPR\n\nリポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n",
 		"| `/repo` | `demo-1-1` | `develop` | 1-1 |\n",

@@ -69,7 +69,8 @@ korylusflow report <計画書>
 ```
 
 どのサブコマンドもプロジェクトのルートで実行します。
-計画書は、ルートからの相対パスか、WikinoのページのURL (`https://wikino.app/s/<スペース>/pages/<ページ番号>`) で指定します (「[計画書名とWikinoのページの計画書](#計画書名とwikinoのページの計画書)」)。
+計画書は、WikinoのページのURL (`https://wikino.app/s/<スペース>/pages/<ページ番号>`) で指定します。
+パスやページ番号だけの指定は受け付けません (「[計画書名とWikinoのページの計画書](#計画書名とwikinoのページの計画書)」)。
 役割は `implementer` (実装者)・`reviewer-codex` (レビュアー (Codex))・`reviewer-claude` (レビュアー (Claude Code)) のいずれかです。
 
 | サブコマンド | 役割                                                                                                                                                                             |
@@ -101,9 +102,7 @@ korylusflow report <計画書>
 **計画書名**: feature-name
 ```
 
-ファイルの計画書では、この行を省略するとファイル名 (拡張子を除く) を使います。
-行を書くときは、ファイル名と同じ値にします。
-Wikinoのページの計画書では、この行が必須です。
+この行は必須です。
 ループの途中で計画書名を変えると、状態の置き場所が変わって続きから進められなくなります。
 
 Wikinoのページの計画書は、[Wikino CLI](https://github.com/wikinoapp/wikino/tree/main/cli) の `wikino` コマンドで、下書きがあれば下書きを、無ければページを読みます。
