@@ -250,6 +250,11 @@ func TestStatusReport(t *testing.T) {
 			want: "状態: 作業報告書の作成の完了を記録中 (waitかdoneで再開できます)\n",
 		},
 		{
+			name: "以前の形式の処理の流れの完了を記録している",
+			st:   &state.State{Pending: &state.Event{Step: state.Step("walkthrough"), Role: state.RoleImplementer, Started: now.Add(-time.Minute), Ended: now}},
+			want: "状態: 処理の流れの作成の完了を記録中 (waitかdoneで再開できます)\n",
+		},
+		{
 			name: "処理の流れを書かなかった作業報告書",
 			st:   &state.State{Reports: []state.ReportRound{{Number: 2, Location: "https://wikino.app/s/demo/pages/2", WalkthroughSkipped: "文面だけのため"}}},
 			want: "作業報告書: 2回目 (https://wikino.app/s/demo/pages/2、処理の流れは書いていません: 文面だけのため)\n",

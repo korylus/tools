@@ -85,8 +85,9 @@ const (
 	StepReport Step = "report"
 )
 
-// stepWalkthroughは、作業報告書のステップの以前の値。この値で記録した状態は、
-// 読むときにStepReportに読み替える。所要時間の記録には残っていることがある。
+// stepWalkthroughは、作業報告書のステップの以前の値。この値で記録した進めているステップ
+// (State.Step) は、読むときにStepReportに読み替える。完了を記録中のステップ (Pending.Step) と
+// 所要時間の記録には、この値のまま残ることがある。
 const stepWalkthrough Step = "walkthrough"
 
 // stepLabelsはステップの表示名。
