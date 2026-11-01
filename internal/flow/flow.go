@@ -168,12 +168,12 @@ func (f *Flow) poll(ctx, lockCtx context.Context, role state.Role) (Instruction,
 	if t, ok := findTask(p, st.Task); ok {
 		in.Title = t.Title
 	}
-	tr := reviewTrail(st)
+	tr := st.ReviewTrail()
 	if tr != nil && len(tr.Reviews) > 0 {
 		last := tr.Reviews[len(tr.Reviews)-1]
 		in.ReviewNumber, in.ReviewDoc = last.Number, last.Doc
 	}
-	if isReportReview(st) {
+	if st.IsReportReview() {
 		in.ReportReview = &ReportReview{URL: st.LatestReport(), Prefix: tr.ReviewPrefix}
 	}
 	switch st.Step {
@@ -264,7 +264,7 @@ func (f *Flow) done(ctx context.Context, role state.Role, input io.Reader, limit
 		event.Reason = st.Ask.Reason
 	}
 	rec := st.TaskRecord(st.Task)
-	tr := reviewTrail(st)
+	tr := st.ReviewTrail()
 	if tr == nil && (st.Step == state.StepReview || st.Step == state.StepFix) {
 		return "", fmt.Errorf("%sのレビューの記録がありません", state.Where(st.Task, st.Step))
 	}

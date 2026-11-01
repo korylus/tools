@@ -118,15 +118,11 @@ func writeState(w io.Writer, st *state.State, now time.Time) {
 	if !st.Since.IsZero() {
 		fmt.Fprintf(w, "ステップの開始: %s (経過 %s)\n", st.Since.Format(timeLayout), formatDuration(now.Sub(st.Since)))
 	}
-	var trail *state.ReviewTrail
 	if rec := st.TaskRecord(st.Task); rec != nil {
 		fmt.Fprintf(w, "リポジトリ: %s (作業するディレクトリ: %s)\n", rec.Repo, rec.Dir)
 		fmt.Fprintf(w, "ブランチ: %s (ベース: %s)\n", rec.Branch, rec.Base)
-		trail = &rec.ReviewTrail
-	} else if st.Task == "" && st.Step != "" && st.Step != state.StepReport && len(st.Reports) > 0 {
-		trail = &st.Reports[len(st.Reports)-1].ReviewTrail
 	}
-	if trail != nil {
+	if trail := st.ReviewTrail(); trail != nil {
 		if n := len(trail.Reviews); n > 0 {
 			fmt.Fprintf(w, "レビュー: %d回 (最新の評価: %s)\n", n, trail.Reviews[n-1].Verdict)
 			if trail.ReviewLimit > 0 {

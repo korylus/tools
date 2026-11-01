@@ -25,35 +25,6 @@ func reviewLimit(tr *state.ReviewTrail) int {
 	return defaultMaxReviews
 }
 
-// reviewTrailは、状態stで進めているレビュー・修正・人への確認が対象にするレビューの記録を返す。
-// タスクのステップならタスクの記録の、作業報告書のレビューなら最新の回の記録を返し、
-// どちらでもなければnilを返す。
-func reviewTrail(st *state.State) *state.ReviewTrail {
-	if st.Task != "" {
-		if rec := st.TaskRecord(st.Task); rec != nil {
-			return &rec.ReviewTrail
-		}
-		return nil
-	}
-	if isReportReview(st) {
-		return &st.Reports[len(st.Reports)-1].ReviewTrail
-	}
-	return nil
-}
-
-// isReportReviewは、状態stが作業報告書のレビュー・修正・人への確認を進めているかを返す。
-// 作業報告書はタスクに属さないため、タスク番号を空にしたこれらのステップで見分ける。
-func isReportReview(st *state.State) bool {
-	if st.Task != "" || len(st.Reports) == 0 {
-		return false
-	}
-	switch st.Step {
-	case state.StepReview, state.StepFix, state.StepAsk:
-		return true
-	}
-	return false
-}
-
 // reportReviewPrefixは、計画書名nameの作業報告書のレビュードキュメントに使うレビュー接頭辞を返す。
 // 回をまたいで同じ接頭辞にし、前の回のレビューの修正検証の対象にする。
 func reportReviewPrefix(name string) string {
@@ -152,7 +123,7 @@ func (f *Flow) finishReview(st *state.State, rec *state.ReviewTrail, now time.Ti
 	limit := reviewLimit(rec)
 	if d.Verdict == review.RequestChanges && n >= limit {
 		next := "続けると、回答と修正のあと、再レビューせずに次のタスクへ進みます"
-		if isReportReview(st) {
+		if st.IsReportReview() {
 			next = "続けると、回答と修正のあと、再レビューせずに作業報告書のレビューを終えます"
 		}
 		setStep(st, state.StepAsk, role, now)
@@ -250,7 +221,7 @@ func (f *Flow) afterFix(st *state.State, rec *state.ReviewTrail, now time.Time) 
 	if review.Verdict(last.Verdict) == review.RequestChanges && last.Number < reviewLimit(rec) {
 		return f.startReview(st, rec, now)
 	}
-	if isReportReview(st) {
+	if st.IsReportReview() {
 		if err := f.coverReport(st); err != nil {
 			return err
 		}

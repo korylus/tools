@@ -296,6 +296,35 @@ func (s *State) TaskRecord(id string) *TaskRecord {
 	return nil
 }
 
+// ReviewTrailは、進めているステップが対象にするレビューの記録を返す。
+// タスクのステップならタスクの記録の、作業報告書のレビュー・修正・人への確認なら
+// 最新の回の記録を返し、どちらでもなければnilを返す。
+func (s *State) ReviewTrail() *ReviewTrail {
+	if s.Task != "" {
+		if rec := s.TaskRecord(s.Task); rec != nil {
+			return &rec.ReviewTrail
+		}
+		return nil
+	}
+	if s.IsReportReview() {
+		return &s.Reports[len(s.Reports)-1].ReviewTrail
+	}
+	return nil
+}
+
+// IsReportReviewは、作業報告書のレビュー・修正・人への確認を進めているかを返す。
+// 作業報告書はタスクに属さないため、タスク番号を空にしたこれらのステップで見分ける。
+func (s *State) IsReportReview() bool {
+	if s.Task != "" || len(s.Reports) == 0 {
+		return false
+	}
+	switch s.Step {
+	case StepReview, StepFix, StepAsk:
+		return true
+	}
+	return false
+}
+
 // Dirは1つの計画書の状態ディレクトリ。
 type Dir struct {
 	path string
