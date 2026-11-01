@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"reflect"
@@ -424,9 +425,10 @@ func TestFlowReportReviewAskHuman(t *testing.T) {
 	}
 }
 
-func TestFlowReportReviewLimit(t *testing.T) {
-	t.Parallel()
-
+// reachReportReviewLimitは、作業報告書のレビューを上限の3回までRequest Changesにして、
+// 3回目のレビュアー (Codex) が上限で人に尋ねるステップまで進める。
+func reachReportReviewLimit(t *testing.T) fixture {
+	t.Helper()
 	fx := startReportReviewFixture(t)
 	for n, role := range []state.Role{state.RoleReviewerCodex, state.RoleReviewerClaude, state.RoleReviewerCodex} {
 		if in := fx.wait(t, role); in.Action != ActionReview || in.ReviewNumber != n+1 {
@@ -446,6 +448,13 @@ func TestFlowReportReviewLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	return fx
+}
+
+func TestFlowReportReviewLimit(t *testing.T) {
+	t.Parallel()
+
+	fx := reachReportReviewLimit(t)
 	in := fx.wait(t, state.RoleReviewerCodex)
 	if in.Action != ActionAsk || in.Ask.Kind != state.AskReviewLimit ||
 		!strings.Contains(strings.Join(in.Ask.Details, "\n"), "再レビューせずに作業報告書のレビューを終えます") {
@@ -453,5 +462,58 @@ func TestFlowReportReviewLimit(t *testing.T) {
 	}
 	if st := fx.load(t); st.Task != "" || state.Where(st.Task, st.Step) != "作業報告書のレビューについての人への確認" {
 		t.Errorf("状態 = %+v", st)
+	}
+}
+
+func TestFlowReportReviewLimitExtended(t *testing.T) {
+	t.Parallel()
+
+	fx := reachReportReviewLimit(t)
+	fx.wait(t, state.RoleReviewerCodex)
+	if _, err := fx.flow.DoneWithReviewLimit(context.Background(), state.RoleReviewerCodex, strings.NewReader(""), 6); err != nil {
+		t.Fatal(err)
+	}
+	if r := fx.load(t).Reports[0]; r.ReviewLimit != 6 {
+		t.Fatalf("作業報告書の回のレビュー上限 = %d、期待値 = 6", r.ReviewLimit)
+	}
+	if in := fx.wait(t, state.RoleReviewerCodex); in.Action != ActionFix || in.ReportReview == nil {
+		t.Fatalf("指示 = %+v、作業報告書の修正を期待", in)
+	}
+	if _, err := fx.done(state.RoleReviewerCodex, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// 延ばした上限までは、前回と別の役割が再レビューする。
+	if in := fx.wait(t, state.RoleReviewerClaude); in.Action != ActionReview || in.ReviewNumber != 4 || in.ReportReview == nil {
+		t.Fatalf("指示 = %+v、作業報告書の4回目のレビューを期待", in)
+	}
+}
+
+func TestFlowReportReviewLimitWithoutExtension(t *testing.T) {
+	t.Parallel()
+
+	fx := reachReportReviewLimit(t)
+	fx.wait(t, state.RoleReviewerCodex)
+	if _, err := fx.done(state.RoleReviewerCodex, ""); err != nil {
+		t.Fatal(err)
+	}
+	if in := fx.wait(t, state.RoleReviewerCodex); in.Action != ActionFix || in.ReportReview == nil {
+		t.Fatalf("指示 = %+v、作業報告書の修正を期待", in)
+	}
+
+	// 延ばさずに続けると、修正のあと再レビューせずに作業報告書のレビューを終える。
+	msg, err := fx.done(state.RoleReviewerCodex, "")
+	if err != nil || !strings.Contains(msg, "作業報告書: "+testReportURL) {
+		t.Fatalf("修正のDone() = %q, %v", msg, err)
+	}
+	if in := fx.wait(t, state.RoleImplementer); in.Action != ActionFinish || in.Report != testReportURL {
+		t.Fatalf("指示 = %+v、作業報告書のURLを持つ終了を期待", in)
+	}
+	events, err := fx.flow.Dir.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := fx.load(t).Reports[0]; r.Events != len(events) || len(r.Reviews) != 3 || r.ReviewLimit != 0 {
+		t.Errorf("作業報告書の記録 = %+v、所要時間の記録 = %d件", r, len(events))
 	}
 }
