@@ -818,6 +818,24 @@ func TestFlowBaseBranch(t *testing.T) {
 		}
 	})
 
+	t.Run("重なっているパスを書いていれば外側のリポジトリのベースにせず人に尋ねる", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+		writeFile(t, fx.repo, ".gitignore", "docs/private/\n")
+		gitRun(t, fx.repo, "add", ".")
+		gitRun(t, fx.repo, "commit", "--quiet", "-m", "ignore")
+		if err := os.MkdirAll(filepath.Join(fx.repo, "docs/private"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		branchFrom(t, fx.repo, "prev")
+		fx.setBases(t, "{repo}/docs/private=prev")
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionAsk || in.Ask.Kind != state.AskBranch || !strings.Contains(in.Ask.Details[0], "無視されています") {
+			t.Fatalf("指示 = %+v、重なっているパスのaskを期待", in)
+		}
+	})
+
 	tests := []struct {
 		name, bases, want string
 	}{
