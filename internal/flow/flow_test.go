@@ -978,3 +978,44 @@ func TestFlowImplementerTask(t *testing.T) {
 		t.Errorf("ブランチを作らないタスクに変更の欄がある:\n%s", out)
 	}
 }
+
+func TestFlowBaseBranchRefs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("同名タグがあっても宣言したローカルブランチから作る", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+		gitRun(t, fx.repo, "tag", "prev")
+		branchFrom(t, fx.repo, "prev")
+		fx.setBases(t, "{repo}=prev")
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Record.Base != "prev" {
+			t.Fatalf("指示 = %+v、prevから作った実装を期待", in)
+		}
+		got := gitRun(t, fx.repo, "rev-parse", "refs/heads/demo-1-1")
+		want := gitRun(t, fx.repo, "rev-parse", "refs/heads/prev")
+		if got != want {
+			t.Errorf("作成したブランチの先頭 = %s、期待値 = %s", got, want)
+		}
+	})
+
+	for _, name := range []string{"prev~1", "prev^{commit}", "prev@{0}"} {
+		t.Run("リビジョン式 "+name+" では人に尋ねる", func(t *testing.T) {
+			t.Parallel()
+			fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+			branchFrom(t, fx.repo, "prev")
+			fx.setBases(t, "{repo}="+name)
+
+			in := fx.wait(t, state.RoleImplementer)
+			if in.Action != ActionAsk || in.Ask.Kind != state.AskBranch ||
+				in.Ask.Reason != "ブランチを作る元のブランチを決められません" ||
+				!strings.Contains(in.Ask.Details[0], "ブランチ "+name+" が "+fx.repo+" にありません") {
+				t.Fatalf("指示 = %+v、ローカルブランチが無いことのaskを期待", in)
+			}
+			if got := gitRun(t, fx.repo, "branch", "--list", "demo-1-1"); got != "" {
+				t.Errorf("準備されたブランチ = %q、ブランチを作らないことを期待", got)
+			}
+		})
+	}
+}

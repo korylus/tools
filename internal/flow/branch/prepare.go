@@ -57,7 +57,7 @@ func Prepare(ctx context.Context, repo, name, base string, exclude []string) err
 	if exists {
 		_, err = git(ctx, repo, "checkout", "--quiet", name)
 	} else {
-		_, err = git(ctx, repo, "checkout", "--quiet", "-b", name, base)
+		_, err = git(ctx, repo, "checkout", "--quiet", "-b", name, "refs/heads/"+base)
 	}
 	return err
 }
@@ -99,7 +99,7 @@ func Ahead(ctx context.Context, repo, base string) (int, error) {
 
 // Existsは、リポジトリrepoにローカルのブランチnameがあるかどうかを返す。
 func Exists(ctx context.Context, repo, name string) (bool, error) {
-	_, err := git(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+name)
+	_, err := git(ctx, repo, "show-ref", "--verify", "--quiet", "refs/heads/"+name)
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
