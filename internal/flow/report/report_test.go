@@ -415,7 +415,7 @@ func TestChains(t *testing.T) {
 func TestBuildMergePRBases(t *testing.T) {
 	t.Parallel()
 
-	// /repoは計画書の行に書いたprevから、/toolsはmainから、/docsは消えたoldから作った。
+	// /repoはprevから、/toolsはmainから作った。
 	newBases := func(t *testing.T, bases map[BaseKey]BaseStatus) Input {
 		t.Helper()
 		in := newInput(t, testPlan)
