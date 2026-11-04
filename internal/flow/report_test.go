@@ -199,3 +199,34 @@ func TestFlowReportWithoutEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestFlowReportBase(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+	branchFrom(t, fx.repo, "prev")
+	fx.setBases(t, "{repo}=prev")
+	fx.wait(t, state.RoleImplementer)
+	commit(t, fx.repo, "first.txt")
+	fx.checkTask(t, "1-1")
+	if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
+		t.Fatalf("実装のDoneのエラー = %v", err)
+	}
+	fx.approve(t, "1-1")
+	fx.writeReport(t)
+
+	if out := fx.facts(t); !strings.Contains(out, "| `"+fx.repo+"` | `demo-1-1` | `prev` | 1-1 |\n") ||
+		!strings.Contains(out, "`prev` はまだ `main` に取り込まれていません。") {
+		t.Errorf("取り込む前の事実が期待と違う:\n%s", out)
+	}
+
+	gitRun(t, fx.repo, "checkout", "--quiet", "main")
+	gitRun(t, fx.repo, "merge", "--quiet", "--no-ff", "-m", "merge prev", "prev")
+	if out := fx.facts(t); !strings.Contains(out, "| `"+fx.repo+"` | `demo-1-1` | `main` (`prev` を取り込み済み) | 1-1 |\n") {
+		t.Errorf("取り込んだ後の事実が期待と違う:\n%s", out)
+	}
+
+	gitRun(t, fx.repo, "branch", "--quiet", "-D", "prev")
+	if out := fx.facts(t); !strings.Contains(out, "`prev` (ローカルに無いため、既定のベースに取り込み済みかを確かめられません)") {
+		t.Errorf("ベースを消した後の事実が期待と違う:\n%s", out)
+	}
+}

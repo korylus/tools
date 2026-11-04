@@ -2,13 +2,14 @@
 //
 // 読み取るのは「## タスクリスト」節のトップレベルのタスク行と、その下の
 // `**担当**:` / `**保護領域**:` / `**想定行数**:` の行と、最初の節より前の
-// `**計画書名**:` の行に限る。
+// `**計画書名**:` / `**ベースブランチ**:` の行に限る。
 // HTMLコメントとコードブロックの中は、書式の例を誤って拾わないよう読み飛ばす。
 package plan
 
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -44,12 +45,17 @@ var (
 	// reNameは計画書名に使える値にマッチする。ブランチ名とパスの一部になるため、
 	// 英小文字・数字と、間に挟むハイフンだけにする。
 	reName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	// reBaseLineは最初の節より前の `**ベースブランチ**:` の行にマッチし、値を取り出す。
+	reBaseLine = regexp.MustCompile(`^\*\*ベースブランチ\*\*:\s*(.*?)\s*$`)
 )
 
 // Planは作業計画書から読み取った内容。
 type Plan struct {
 	// Nameは本文の `**計画書名**:` の行に書かれた計画書名。行が無ければ空文字。
 	Name string
+	// Basesは本文の `**ベースブランチ**:` の行に書かれた、リポジトリごとのベースの宣言。
+	// 行が無ければ空。
+	Bases []BaseBranch
 	// Tasksは計画書に書かれた順のタスク。
 	Tasks []Task
 }
@@ -72,6 +78,15 @@ type Task struct {
 	Lines Size
 	// LineNoはタスク行の行番号 (1始まり)。
 	LineNo int
+}
+
+// BaseBranchは、`**ベースブランチ**:` の行に書いたベースの宣言1件。
+// パスはfilepath.Cleanで整えるだけにし、リポジトリを求める処理はgitを呼ぶ側に任せる。
+type BaseBranch struct {
+	// Dirは宣言したディレクトリの絶対パス。
+	Dir string
+	// Branchは、Dirを含むリポジトリの最初のタスクのブランチを作る元のブランチ。
+	Branch string
 }
 
 // Declarationは保護領域の宣言1件。
@@ -150,7 +165,7 @@ func Parse(src string) (*Plan, error) {
 	seen := map[string]int{}
 	assigneeLines := map[string]int{}
 	inSection, inComment, beforeSections := false, false, true
-	nameLineNo := 0
+	nameLineNo, baseLineNo := 0, 0
 	var cur *Task
 
 	src = strings.ReplaceAll(src, "\r\n", "\n")
@@ -190,6 +205,16 @@ func Parse(src string) (*Plan, error) {
 					p.Name = m[1]
 				}
 				nameLineNo = lineNo
+			}
+			if m := reBaseLine.FindStringSubmatch(line); m != nil {
+				if baseLineNo > 0 {
+					errs = append(errs, fmt.Errorf("%d行目: ベースブランチの行が重複しています (%d行目と同じ)", lineNo, baseLineNo))
+				} else if bases, err := parseBases(m[1]); err != nil {
+					errs = append(errs, fmt.Errorf("%d行目: ベースブランチ: %w", lineNo, err))
+				} else {
+					p.Bases = bases
+				}
+				baseLineNo = lineNo
 			}
 			continue
 		}
@@ -291,6 +316,35 @@ func codeLines(src string, lines []string) []bool {
 		return ast.WalkContinue, nil
 	})
 	return inCode
+}
+
+// parseBasesは「<ディレクトリのパス>=<ブランチ名>, ...」の形のベースの宣言を読む。
+func parseBases(s string) ([]BaseBranch, error) {
+	var bases []BaseBranch
+	var errs []error
+	seen := map[string]bool{}
+	for item := range strings.SplitSeq(s, ", ") {
+		item = strings.TrimSpace(item)
+		dir, name, ok := strings.Cut(item, "=")
+		dir, name = filepath.Clean(strings.TrimSpace(dir)), strings.TrimSpace(name)
+		switch {
+		case !ok:
+			errs = append(errs, fmt.Errorf("「<ディレクトリのパス>=<ブランチ名>」の形で書いてください: %q", item))
+		case !strings.HasPrefix(dir, "/"):
+			errs = append(errs, fmt.Errorf("パスは / で始まる絶対パスにしてください: %q", item))
+		case name == "":
+			errs = append(errs, fmt.Errorf("ブランチ名が空です: %q", item))
+		case seen[dir]:
+			errs = append(errs, fmt.Errorf("パス %s が重複しています", dir))
+		default:
+			seen[dir] = true
+			bases = append(bases, BaseBranch{Dir: dir, Branch: name})
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return bases, nil
 }
 
 // parseDeclarationsは「名前 (触れる内容), 名前 (触れる内容)」の形の宣言を読む。

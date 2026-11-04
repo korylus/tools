@@ -411,3 +411,80 @@ func TestChains(t *testing.T) {
 		t.Errorf("Chains() = %+v、/repoのdemo-1-2 (ベースdevelop、1-1と1-2) の1本を期待", got)
 	}
 }
+
+func TestBuildMergePRBases(t *testing.T) {
+	t.Parallel()
+
+	// /repoはprevから、/toolsはmainから作った。
+	newBases := func(t *testing.T, bases map[BaseKey]BaseStatus) Input {
+		t.Helper()
+		in := newInput(t, testPlan)
+		in.State.Tasks[0].Base = "prev"
+		in.State.Tasks = append(in.State.Tasks,
+			state.TaskRecord{ID: "1-3", Repo: "/tools", Dir: "/tools", Branch: "demo-1-3", Base: "main", Prepared: true},
+		)
+		in.Events = append(in.Events, state.Event{Task: "1-3", Step: state.StepImplement, Role: state.RoleImplementer, Started: at(110), Ended: at(115)})
+		in.Bases = bases
+		return in
+	}
+	const checkedNote = "既定のベース (develop、無ければmain) と違うベースが取り込み済みかは、ローカルの既定のベースで確かめました。"
+	tools := BaseStatus{Default: "main"}
+
+	t.Run("取り込み済みなら既定のベースを示す", func(t *testing.T) {
+		t.Parallel()
+		out := string(Build(newBases(t, map[BaseKey]BaseStatus{
+			{Repo: "/repo", Branch: "prev"}:  {Default: "develop", Merged: true},
+			{Repo: "/tools", Branch: "main"}: tools,
+		})))
+		assertContains(t, out,
+			"| `/repo` | `demo-1-1` | `develop` (`prev` を取り込み済み) | 1-1 |\n| `/tools` | `demo-1-3` | `main` | 1-3 |\n",
+			checkedNote,
+		)
+		if strings.Contains(out, "先にマージしてから") {
+			t.Errorf("取り込み済みなのに先にマージするよう書いている:\n%s", out)
+		}
+	})
+
+	t.Run("まだ取り込まれていなければベースを示し、先にマージするよう添える", func(t *testing.T) {
+		t.Parallel()
+		out := string(Build(newBases(t, map[BaseKey]BaseStatus{
+			{Repo: "/repo", Branch: "prev"}:  {Default: "develop"},
+			{Repo: "/tools", Branch: "main"}: tools,
+		})))
+		assertContains(t, out,
+			"| `/repo` | `demo-1-1` | `prev` | 1-1 |\n",
+			"\n`prev` はまだ `develop` に取り込まれていません。`prev` のPRを先にマージしてから、`develop` へのPRを作ってください。\n",
+			checkedNote,
+		)
+	})
+
+	t.Run("ローカルに無ければ確かめられないことを示す", func(t *testing.T) {
+		t.Parallel()
+		out := string(Build(newBases(t, map[BaseKey]BaseStatus{
+			{Repo: "/repo", Branch: "prev"}:  {Default: "develop", Missing: true},
+			{Repo: "/tools", Branch: "main"}: tools,
+		})))
+		assertContains(t, out, "| `/repo` | `demo-1-1` | `prev` (ローカルに無いため、既定のベースに取り込み済みかを確かめられません) | 1-1 |\n", checkedNote)
+	})
+
+	t.Run("既定のベースを求められなければ理由を示す", func(t *testing.T) {
+		t.Parallel()
+		out := string(Build(newBases(t, map[BaseKey]BaseStatus{
+			{Repo: "/repo", Branch: "prev"}:  {Err: "develop / main のどちらのブランチもありません"},
+			{Repo: "/tools", Branch: "main"}: tools,
+		})))
+		assertContains(t, out, "| `/repo` | `demo-1-1` | `prev` (既定のベースに取り込み済みかを確かめられません: develop / main のどちらのブランチもありません) | 1-1 |\n")
+	})
+
+	t.Run("既定のベースだけなら説明を添えない", func(t *testing.T) {
+		t.Parallel()
+		in := newBases(t, map[BaseKey]BaseStatus{
+			{Repo: "/repo", Branch: "develop"}: {Default: "develop"},
+			{Repo: "/tools", Branch: "main"}:   tools,
+		})
+		in.State.Tasks[0].Base = "develop"
+		if out := string(Build(in)); strings.Contains(out, "ローカルの既定のベースで確かめました") {
+			t.Errorf("既定のベースだけなのに確かめた旨を書いている:\n%s", out)
+		}
+	})
+}

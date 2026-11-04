@@ -513,7 +513,7 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 	// いることがあるため、準備するたびに求め直す。
 	if rec == nil || !rec.Prepared {
 		var base string
-		if base, err = baseBranch(ctx, st, target.Repo); err != nil {
+		if base, err = baseBranch(ctx, st, p.Bases, target.Repo); err != nil {
 			setAsk(st, state.AskBranch, "ブランチを作る元のブランチを決められません", err.Error())
 			return
 		}
@@ -541,8 +541,9 @@ func (f *Flow) advance(ctx context.Context, st *state.State, p *plan.Plan) {
 
 // baseBranchは、リポジトリrepoで次のタスクのブランチを作る元のブランチを返す。
 // 前のタスクのブランチがローカルに残っていればそれを、無ければ (マージして消したなど)
-// そのリポジトリの最初のタスクと同じ元のブランチを返す。
-func baseBranch(ctx context.Context, st *state.State, repo string) (string, error) {
+// そのリポジトリの最初のタスクと同じ元のブランチを返す。最初のタスクの元のブランチは、
+// 計画書のベースブランチの行basesにrepoのブランチがあればそれ、無ければdevelop / mainにする。
+func baseBranch(ctx context.Context, st *state.State, bases []plan.BaseBranch, repo string) (string, error) {
 	if prev := previousBranch(st, repo); prev != "" {
 		ok, err := branch.Exists(ctx, repo, prev)
 		if err != nil {
@@ -552,7 +553,40 @@ func baseBranch(ctx context.Context, st *state.State, repo string) (string, erro
 			return prev, nil
 		}
 	}
-	return branch.DefaultBase(ctx, repo)
+
+	declared, err := declaredBase(ctx, bases, repo)
+	if err != nil {
+		return "", err
+	}
+	if declared == "" {
+		return branch.DefaultBase(ctx, repo)
+	}
+	ok, err := branch.Exists(ctx, repo, declared)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("計画書のベースブランチの行に書いたブランチ %s が %s にありません", declared, repo)
+	}
+	return declared, nil
+}
+
+// declaredBaseは、計画書のベースブランチの行basesに書いた、リポジトリrepoのブランチを返す。
+// 無ければ空文字を返す。打ち間違えたパスを黙って無視しないよう、repo以外のリポジトリの
+// 宣言も含めて、すべてのパスをリポジトリに揃えてから照らし合わせる。
+func declaredBase(ctx context.Context, bases []plan.BaseBranch, repo string) (string, error) {
+	byRepo := map[string]plan.BaseBranch{}
+	for _, b := range bases {
+		r, err := branch.Repo(ctx, b.Dir)
+		if err != nil {
+			return "", fmt.Errorf("計画書のベースブランチの行のパス %s: %w", b.Dir, err)
+		}
+		if prev, ok := byRepo[r]; ok && prev.Branch != b.Branch {
+			return "", fmt.Errorf("計画書のベースブランチの行で、リポジトリ %s に別々のブランチを書いています: %s=%s, %s=%s", r, prev.Dir, prev.Branch, b.Dir, b.Branch)
+		}
+		byRepo[r] = b
+	}
+	return byRepo[repo].Branch, nil
 }
 
 // previousBranchは、同じリポジトリrepoで最後にブランチを準備できたタスクのブランチを返す。

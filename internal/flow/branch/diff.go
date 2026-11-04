@@ -16,10 +16,11 @@ type FileChange struct {
 	Binary bool
 }
 
-// Changesは、リポジトリrepoでbaseとheadの分岐点からheadまでに変更したファイルを返す。
+// Changesは、リポジトリrepoでローカルのブランチbaseとheadの分岐点からheadまでに変更したファイルを返す。
+// 同名のタグがあってもブランチどうしを比べるよう、baseとheadは完全な参照名で指す。
 // 名前の変更は、元のファイルの削除と新しいファイルの追加として数える。
 func Changes(ctx context.Context, repo, base, head string) ([]FileChange, error) {
-	out, err := git(ctx, repo, "diff", "--numstat", "--no-renames", "-z", base+"..."+head)
+	out, err := git(ctx, repo, "diff", "--numstat", "--no-renames", "-z", "refs/heads/"+base+"...refs/heads/"+head)
 	if err != nil {
 		return nil, err
 	}

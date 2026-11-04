@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-11-01 -->
+<!-- last_synced: 2026-11-04 -->
 
 # korylus-tools
 
@@ -113,9 +113,30 @@ This is because the checks and the implementation decision log written by the im
 Because `korylusflow` reads pages on `https://wikino.app`, add `--host=https://wikino.app` when you log in if you have changed the default host.
 When the plan cannot be read, for example because you are not logged in or hit the rate limit, it ends with an error without changing the state.
 
+### Base branches
+
+To stack a plan on top of another plan's branch that has not been merged yet, write the branch to create each repository's first task branch from, before the first `## ` heading of the plan.
+The value is a list of `<directory path>=<branch name>` separated by `, `.
+As with a task's prefix, the path is an absolute path to a directory in the repository, and it sets the base of the repository that contains the directory.
+
+```markdown
+**ベースブランチ**: /workspace=prev-feature-1-3, /korylus-tools=prev-feature-1-2
+```
+
+The branch to create a task branch from is decided in the following order.
+The current branch of the working tree is not used.
+
+1. The previous task's branch in the same repository, if it exists locally
+2. The branch written for that repository on the base branch line, if any
+3. Otherwise develop, or main if there is no develop
+
+When a path on the line cannot be resolved to a repository, different branches are written for the same repository, or a branch on the line does not exist locally, it does not proceed automatically and tells the implementer to ask the human.
+A malformed line (no `=`, a path not starting with `/`, an empty branch name, or a duplicated path or line) is an error that makes the plan unreadable.
+The base of a task whose branch has already been prepared does not change even if the line is edited later.
+
 ### Flow of a task
 
-1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task or when the previous task's branch no longer exists locally, or main if there is no develop)
+1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>`; the branch to create it from is decided in the order described in "[Base branches](#base-branches)"
 2. The implementer implements the task with `/korylus-do-plan-task` and commits
 3. A reviewer reviews with `/korylus-review`; Codex does the first review, and later reviews are done by a different role than the previous one
 4. `korylusflow` answers the auto-fixable findings in the review document with the recommended options, and the reviewer fixes the code and commits
@@ -196,6 +217,14 @@ It does not change the state, so you can run it in the middle of the loop.
 `korylusflow` does not push, create PRs, or merge.
 After a human checks the work report, they follow the PRs to merge in `korylusflow report`: one PR per repository from the last task's branch to the first task's base branch, merged with a merge commit.
 When the branches do not form a single line, for example because the previous task's branch no longer existed and the branch was recreated from the first base, it shows a PR for each connected line.
+
+When a plan is stacked on a branch other than the default base (develop, or main if there is no develop) with the "[Base branches](#base-branches)" line, it checks with the local branches whether that base has been merged into the default base, and shows the result.
+
+| State of the base            | Base column        | Note                                                                      |
+| ---------------------------- | ------------------ | ------------------------------------------------------------------------- |
+| Merged into the default base | The default base   | That it has been merged                                                   |
+| Not merged yet               | The stacked branch | Merge the stacked branch's PR first, then open the PR to the default base |
+| Does not exist locally       | The stacked branch | That it cannot check whether it has been merged                           |
 
 State written while Markdown work reports (`report-<version>.md`) were built can still be read.
 Earlier versions are carried over as rounds without a page, and the next time the plan reaches the end, the implementer creates a new work report page.

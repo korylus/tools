@@ -386,3 +386,60 @@ func TestParse_IndentedFenceOutsideList(t *testing.T) {
 		t.Errorf("タスク = %+v、期待値 = 1-1のみ", p.Tasks)
 	}
 }
+
+func TestParse_Bases(t *testing.T) {
+	t.Parallel()
+	const tasks = "## タスクリスト\n\n- [ ] **1-1**: タスク\n"
+	tests := []struct {
+		name, head string
+		want       []BaseBranch
+	}{
+		{"行が無い", "# 計画書\n\n", nil},
+		{"1つのリポジトリ", "**ベースブランチ**: /workspace=prev-feature-1-2\n", []BaseBranch{{Dir: "/workspace", Branch: "prev-feature-1-2"}}},
+		{
+			"複数のリポジトリとパスの正規化",
+			"**計画書名**: next\n**ベースブランチ**: /workspace/go/=prev ,  /korylus-tools=prev-tools\n",
+			[]BaseBranch{{Dir: "/workspace/go", Branch: "prev"}, {Dir: "/korylus-tools", Branch: "prev-tools"}},
+		},
+		{"カンマを含むブランチ名", "**ベースブランチ**: /workspace=prev,extra\n", []BaseBranch{{Dir: "/workspace", Branch: "prev,extra"}}},
+		{"カンマを含むブランチ名と複数のリポジトリ", "**ベースブランチ**: /workspace=prev,extra, /korylus-tools=tools,extra\n", []BaseBranch{{Dir: "/workspace", Branch: "prev,extra"}, {Dir: "/korylus-tools", Branch: "tools,extra"}}},
+		{"HTMLコメントの中は読まない", "<!--\n**ベースブランチ**: /workspace=example\n-->\n", nil},
+		{"最初の節より後ろは読まない", "## 概要\n\n**ベースブランチ**: /workspace=example\n\n", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p, err := Parse(tt.head + "\n" + tasks)
+			if err != nil {
+				t.Fatalf("Parse() のエラー = %v", err)
+			}
+			if !reflect.DeepEqual(p.Bases, tt.want) {
+				t.Errorf("Bases = %+v、期待値 = %+v", p.Bases, tt.want)
+			}
+		})
+	}
+}
+
+func TestParse_BasesErrors(t *testing.T) {
+	t.Parallel()
+	const tasks = "## タスクリスト\n\n- [ ] **1-1**: タスク\n"
+	tests := []struct {
+		name, head, want string
+	}{
+		{"= が無い", "**ベースブランチ**: /workspace\n", "1行目: ベースブランチ: 「<ディレクトリのパス>=<ブランチ名>」の形で書いてください: \"/workspace\""},
+		{"空の値", "**ベースブランチ**:\n", "「<ディレクトリのパス>=<ブランチ名>」の形で書いてください: \"\""},
+		{"相対パス", "**ベースブランチ**: workspace=prev\n", "パスは / で始まる絶対パスにしてください: \"workspace=prev\""},
+		{"空のブランチ名", "**ベースブランチ**: /workspace=\n", "ブランチ名が空です: \"/workspace=\""},
+		{"同じパスの重複", "**ベースブランチ**: /workspace=a, /workspace/=b\n", "パス /workspace が重複しています"},
+		{"行の重複", "**ベースブランチ**: /workspace=a\n**ベースブランチ**: /workspace=a\n", "2行目: ベースブランチの行が重複しています (1行目と同じ)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(tt.head + "\n" + tasks)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Parse() のエラー = %v、期待値 = %q を含むエラー", err, tt.want)
+			}
+		})
+	}
+}

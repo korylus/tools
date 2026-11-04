@@ -166,3 +166,74 @@ func TestHead(t *testing.T) {
 		t.Errorf("Head(missing) = %q, %v、無いブランチでは空文字を期待", got, err)
 	}
 }
+
+// branchOverTagは、HEADに同名のタグnameを付けてから、コミットを1つ足したブランチnameを作って切り替える。
+func branchOverTag(t *testing.T, repo, name string) {
+	t.Helper()
+	gitRun(t, repo, "tag", name)
+	gitRun(t, repo, "checkout", "--quiet", "-b", name)
+	writeFile(t, repo, name+".txt", name+"\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "--quiet", "-m", name)
+}
+
+func TestAheadWithSameNamedTag(t *testing.T) {
+	t.Parallel()
+	repo := newRepoOn(t, "main")
+	branchOverTag(t, repo, "prev")
+	gitRun(t, repo, "checkout", "--quiet", "-b", "plan-1-1")
+
+	if n, err := Ahead(context.Background(), repo, "prev"); err != nil || n != 0 {
+		t.Errorf("Ahead() = %d, %v、期待値 = 0 (同名タグではなくブランチprevから数える)", n, err)
+	}
+}
+
+func TestExists(t *testing.T) {
+	t.Parallel()
+	repo := newRepoOn(t, "main")
+	writeFile(t, repo, "second.txt", "次のコミット\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "--quiet", "-m", "次のコミット")
+	gitRun(t, repo, "branch", "prev,extra")
+
+	tests := []struct {
+		name, branch string
+		want         bool
+	}{
+		{"存在するブランチ", "main", true},
+		{"カンマを含むブランチ", "prev,extra", true},
+		{"存在しないブランチ", "missing", false},
+		{"親コミットの式", "main~1", false},
+		{"コミットを指す式", "main^{commit}", false},
+		{"reflogの式", "main@{0}", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := Exists(context.Background(), repo, tt.branch)
+			if err != nil || got != tt.want {
+				t.Errorf("Exists(%q) = %v, %v、期待値 = %v", tt.branch, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestMerged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := newRepoOn(t, "main")
+	// タグprevはmainを指し、ブランチprevはmainより先のコミットを持つ。
+	branchOverTag(t, repo, "prev")
+	gitRun(t, repo, "checkout", "--quiet", "main")
+
+	if ok, err := Merged(ctx, repo, "prev", "main"); err != nil || ok {
+		t.Errorf("取り込む前のMerged() = %v, %v、期待値 = false (同名タグではなくブランチprevで確かめる)", ok, err)
+	}
+	gitRun(t, repo, "merge", "--quiet", "--no-ff", "-m", "merge prev", "refs/heads/prev")
+	if ok, err := Merged(ctx, repo, "prev", "main"); err != nil || !ok {
+		t.Errorf("取り込んだ後のMerged() = %v, %v、期待値 = true", ok, err)
+	}
+	if _, err := Merged(ctx, repo, "missing", "main"); err == nil {
+		t.Error("無いブランチでエラーを期待したが、nilだった")
+	}
+}

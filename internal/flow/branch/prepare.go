@@ -57,7 +57,7 @@ func Prepare(ctx context.Context, repo, name, base string, exclude []string) err
 	if exists {
 		_, err = git(ctx, repo, "checkout", "--quiet", name)
 	} else {
-		_, err = git(ctx, repo, "checkout", "--quiet", "-b", name, base)
+		_, err = git(ctx, repo, "checkout", "--quiet", "-b", name, "refs/heads/"+base)
 	}
 	return err
 }
@@ -88,9 +88,10 @@ func Current(ctx context.Context, repo string) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
-// Aheadは、リポジトリrepoのHEADがbaseより先に持つコミットの数を返す。
+// Aheadは、リポジトリrepoのHEADが、ローカルのブランチbaseより先に持つコミットの数を返す。
+// 同名のタグがあってもブランチから数えるよう、baseは完全な参照名で指す。
 func Ahead(ctx context.Context, repo, base string) (int, error) {
-	out, err := git(ctx, repo, "rev-list", "--count", base+"..HEAD")
+	out, err := git(ctx, repo, "rev-list", "--count", "refs/heads/"+base+"..HEAD")
 	if err != nil {
 		return 0, err
 	}
@@ -99,7 +100,23 @@ func Ahead(ctx context.Context, repo, base string) (int, error) {
 
 // Existsは、リポジトリrepoにローカルのブランチnameがあるかどうかを返す。
 func Exists(ctx context.Context, repo, name string) (bool, error) {
-	_, err := git(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+name)
+	_, err := git(ctx, repo, "show-ref", "--verify", "--quiet", "refs/heads/"+name)
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// Mergedは、リポジトリrepoのローカルのブランチnameが、ローカルのブランチintoに
+// 取り込み済み (nameの先頭のコミットがintoの祖先) かどうかを返す。
+// 同名のタグがあってもブランチどうしを比べるよう、完全な参照名で指す。
+func Merged(ctx context.Context, repo, name, into string) (bool, error) {
+	_, err := git(ctx, repo, "merge-base", "--is-ancestor", "refs/heads/"+name, "refs/heads/"+into)
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:

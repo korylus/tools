@@ -38,6 +38,7 @@ func (f *Flow) Report(ctx context.Context) ([]byte, error) {
 			in.Changes[rec.ID] = readChanges(ctx, rec)
 		}
 	}
+	in.Bases = readBases(ctx, report.Chains(st, events))
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -65,6 +66,43 @@ func hasNewEvents(st *state.State, events []state.Event) bool {
 		covered = st.Reports[n-1].Events
 	}
 	return len(events) > covered
+}
+
+// readBasesは、「マージするPR」の並びchainsのベースごとに、リポジトリの既定のベースとの関係を求める。
+func readBases(ctx context.Context, chains []report.Chain) map[report.BaseKey]report.BaseStatus {
+	bases := map[report.BaseKey]report.BaseStatus{}
+	for _, c := range chains {
+		key := report.BaseKey{Repo: c.Head.Repo, Branch: c.Base}
+		if _, ok := bases[key]; !ok {
+			bases[key] = readBase(ctx, key)
+		}
+	}
+	return bases
+}
+
+// readBaseは、ベースkeyがリポジトリの既定のベースに取り込み済みかを、ローカルのブランチで確かめる。
+// 確かめられなくても事実を組み立てられるよう、理由を残して続ける。
+func readBase(ctx context.Context, key report.BaseKey) report.BaseStatus {
+	def, err := branch.DefaultBase(ctx, key.Repo)
+	if err != nil {
+		return report.BaseStatus{Err: err.Error()}
+	}
+	st := report.BaseStatus{Default: def}
+	if def == key.Branch {
+		return st
+	}
+	ok, err := branch.Exists(ctx, key.Repo, key.Branch)
+	switch {
+	case err != nil:
+		st.Err = err.Error()
+	case !ok:
+		st.Missing = true
+	default:
+		if st.Merged, err = branch.Merged(ctx, key.Repo, key.Branch, def); err != nil {
+			st.Err = err.Error()
+		}
+	}
+	return st
 }
 
 // readChangesは、タスクの記録recの元のブランチからタスクのブランチまでの変更を読む。
