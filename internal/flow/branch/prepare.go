@@ -112,6 +112,22 @@ func Exists(ctx context.Context, repo, name string) (bool, error) {
 	}
 }
 
+// Mergedは、リポジトリrepoのローカルのブランチnameが、ローカルのブランチintoに
+// 取り込み済み (nameの先頭のコミットがintoの祖先) かどうかを返す。
+// 同名のタグがあってもブランチどうしを比べるよう、完全な参照名で指す。
+func Merged(ctx context.Context, repo, name, into string) (bool, error) {
+	_, err := git(ctx, repo, "merge-base", "--is-ancestor", "refs/heads/"+name, "refs/heads/"+into)
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // Headは、リポジトリrepoのブランチnameの先頭のコミットのハッシュを返す。
 // ブランチがローカルに無ければ空文字を返す。
 func Head(ctx context.Context, repo, name string) (string, error) {

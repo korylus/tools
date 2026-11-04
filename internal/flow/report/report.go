@@ -41,6 +41,27 @@ type Input struct {
 	Events []state.Event
 	// Changesはタスク番号ごとの、元のブランチからタスクのブランチまでの変更。
 	Changes map[string]Changes
+	// Basesは、「マージするPR」の各行のベースが、リポジトリの既定のベースに取り込み済みか。
+	// 無いベースは、既定のベースと同じものとして示す。
+	Bases map[BaseKey]BaseStatus
+}
+
+// BaseKeyは、「マージするPR」の行のベースを指す。
+type BaseKey struct {
+	Repo   string
+	Branch string
+}
+
+// BaseStatusは、PRのベースにするブランチと、リポジトリの既定のベース (develop、無ければmain) との関係。
+type BaseStatus struct {
+	// Defaultはリポジトリの既定のベース。求められなければ空文字。
+	Default string
+	// Mergedは、ベースが既定のベースに取り込み済みかどうか。
+	Merged bool
+	// Missingは、ベースがローカルに無いため、取り込み済みかを確かめられなかったかどうか。
+	Missing bool
+	// Errは、Missing以外の理由で確かめられなかったときの理由。確かめられたら空文字。
+	Err string
 }
 
 // Changesはタスク1件のブランチの変更。
@@ -109,20 +130,55 @@ func (b *builder) overview() {
 	}
 	b.f("リポジトリごとに、PRにするブランチをpushしてベースへのPRを1つ作り、merge commitでマージしてください。\n\n")
 	b.f("| リポジトリ | PRにするブランチ | ベース | 含むタスク |\n| --- | --- | --- | --- |\n")
-	split := false
+	split, checked := false, false
+	var pending []string
 	for _, c := range chains(b.records) {
 		head := code(c.Head.Branch)
 		if slices.Contains(b.in.Changes[c.Head.ID].Missing, c.Head.Branch) {
 			head += " (ローカルに残っていません)"
 		}
-		b.f("| %s | %s | %s | %s |\n", code(c.Head.Repo), head, code(c.Base), strings.Join(c.Tasks, "・"))
+		base, ok := b.in.Bases[BaseKey{Repo: c.Head.Repo, Branch: c.Base}]
+		nonDefault := ok && base.Default != c.Base
+		baseCell, note := baseColumn(c.Base, base, nonDefault)
+		if note != "" {
+			pending = append(pending, note)
+		}
+		b.f("| %s | %s | %s | %s |\n", code(c.Head.Repo), head, baseCell, strings.Join(c.Tasks, "・"))
 		split = split || c.Split
+		checked = checked || nonDefault
 	}
 	if split {
 		b.f("\n同じリポジトリに複数の行があるときは、ブランチが1本に繋がっていません (前のタスクのブランチが残っておらず、最初のベースから作り直したなど)。\n")
 		b.f("上の行から順に、まだマージしていないものをマージしてください。\n")
 	}
+	if len(pending) > 0 {
+		b.f("\n")
+		for _, note := range pending {
+			b.f("%s\n", note)
+		}
+	}
+	if checked {
+		b.f("\n既定のベース (develop、無ければmain) と違うベースが取り込み済みかは、ローカルの既定のベースで確かめました。\n")
+	}
 	b.f("\n")
+}
+
+// baseColumnは、「マージするPR」の行のベースの列と、表の下に添える説明を返す。
+// ベースが既定のベースと同じ (nonDefaultがfalse) なら、ベースをそのまま示す。
+func baseColumn(name string, st BaseStatus, nonDefault bool) (cellText, note string) {
+	switch {
+	case !nonDefault:
+		return code(name), ""
+	case st.Err != "":
+		return code(name) + " (" + cell("既定のベースに取り込み済みかを確かめられません: "+st.Err) + ")", ""
+	case st.Missing:
+		return code(name) + " (ローカルに無いため、既定のベースに取り込み済みかを確かめられません)", ""
+	case st.Merged:
+		return code(st.Default) + " (" + code(name) + " を取り込み済み)", ""
+	default:
+		return code(name), fmt.Sprintf("%s はまだ %s に取り込まれていません。%s のPRを先にマージしてから、%s へのPRを作ってください。",
+			code(name), code(st.Default), code(name), code(st.Default))
+	}
 }
 
 // Chainは、1つのPRにまとめてマージする、元のブランチで1本に繋がったタスクのブランチの並び。

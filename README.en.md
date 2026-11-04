@@ -218,6 +218,14 @@ It does not change the state, so you can run it in the middle of the loop.
 After a human checks the work report, they follow the PRs to merge in `korylusflow report`: one PR per repository from the last task's branch to the first task's base branch, merged with a merge commit.
 When the branches do not form a single line, for example because the previous task's branch no longer existed and the branch was recreated from the first base, it shows a PR for each connected line.
 
+When a plan is stacked on a branch other than the default base (develop, or main if there is no develop) with the "[Base branches](#base-branches)" line, it checks with the local branches whether that base has been merged into the default base, and shows the result.
+
+| State of the base            | Base column        | Note                                                                      |
+| ---------------------------- | ------------------ | ------------------------------------------------------------------------- |
+| Merged into the default base | The default base   | That it has been merged                                                   |
+| Not merged yet               | The stacked branch | Merge the stacked branch's PR first, then open the PR to the default base |
+| Does not exist locally       | The stacked branch | That it cannot check whether it has been merged                           |
+
 State written while Markdown work reports (`report-<version>.md`) were built can still be read.
 Earlier versions are carried over as rounds without a page, and the next time the plan reaches the end, the implementer creates a new work report page.
 Existing `report-<version>.md` files are not deleted.

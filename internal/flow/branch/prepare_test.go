@@ -217,3 +217,23 @@ func TestExists(t *testing.T) {
 		})
 	}
 }
+
+func TestMerged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := newRepoOn(t, "main")
+	// タグprevはmainを指し、ブランチprevはmainより先のコミットを持つ。
+	branchOverTag(t, repo, "prev")
+	gitRun(t, repo, "checkout", "--quiet", "main")
+
+	if ok, err := Merged(ctx, repo, "prev", "main"); err != nil || ok {
+		t.Errorf("取り込む前のMerged() = %v, %v、期待値 = false (同名タグではなくブランチprevで確かめる)", ok, err)
+	}
+	gitRun(t, repo, "merge", "--quiet", "--no-ff", "-m", "merge prev", "refs/heads/prev")
+	if ok, err := Merged(ctx, repo, "prev", "main"); err != nil || !ok {
+		t.Errorf("取り込んだ後のMerged() = %v, %v、期待値 = true", ok, err)
+	}
+	if _, err := Merged(ctx, repo, "missing", "main"); err == nil {
+		t.Error("無いブランチでエラーを期待したが、nilだった")
+	}
+}
