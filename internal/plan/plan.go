@@ -81,7 +81,7 @@ type Task struct {
 }
 
 // BaseBranchは、`**ベースブランチ**:` の行に書いたベースの宣言1件。
-// パスからリポジトリを求める処理はgitを呼ぶ側に任せ、ここでは書かれたとおりに持つ。
+// パスはfilepath.Cleanで整えるだけにし、リポジトリを求める処理はgitを呼ぶ側に任せる。
 type BaseBranch struct {
 	// Dirは宣言したディレクトリの絶対パス。
 	Dir string
