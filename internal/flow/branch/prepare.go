@@ -88,9 +88,10 @@ func Current(ctx context.Context, repo string) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
-// Aheadは、リポジトリrepoのHEADがbaseより先に持つコミットの数を返す。
+// Aheadは、リポジトリrepoのHEADが、ローカルのブランチbaseより先に持つコミットの数を返す。
+// 同名のタグがあってもブランチから数えるよう、baseは完全な参照名で指す。
 func Ahead(ctx context.Context, repo, base string) (int, error) {
-	out, err := git(ctx, repo, "rev-list", "--count", base+"..HEAD")
+	out, err := git(ctx, repo, "rev-list", "--count", "refs/heads/"+base+"..HEAD")
 	if err != nil {
 		return 0, err
 	}

@@ -44,3 +44,20 @@ func TestChanges(t *testing.T) {
 		t.Error("無いブランチでエラーを期待したが、nilだった")
 	}
 }
+
+func TestChangesWithSameNamedTag(t *testing.T) {
+	t.Parallel()
+	repo := newRepoOn(t, "main")
+	// タグprevはmainを、タグtaskはブランチprevを指し、どちらもブランチとは別のコミットになる。
+	branchOverTag(t, repo, "prev")
+	branchOverTag(t, repo, "task")
+
+	files, err := Changes(context.Background(), repo, "prev", "task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []FileChange{{Path: "task.txt", Added: 1}}
+	if !slices.Equal(files, want) {
+		t.Errorf("変更 = %+v、期待値 = %+v (同名タグではなくブランチどうしを比べる)", files, want)
+	}
+}

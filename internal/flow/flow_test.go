@@ -998,6 +998,11 @@ func TestFlowBaseBranchRefs(t *testing.T) {
 		if got != want {
 			t.Errorf("作成したブランチの先頭 = %s、期待値 = %s", got, want)
 		}
+
+		// タグはブランチより前のコミットを指すため、タグから数えるとコミットが無くても完了できてしまう。
+		fx.checkTask(t, "1-1")
+		_, err := fx.done(state.RoleImplementer, "[]")
+		assertRejected(t, err, "ベース prev より先のコミットがありません")
 	})
 
 	for _, name := range []string{"prev~1", "prev^{commit}", "prev@{0}"} {

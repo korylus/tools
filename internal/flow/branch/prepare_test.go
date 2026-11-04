@@ -167,6 +167,27 @@ func TestHead(t *testing.T) {
 	}
 }
 
+// branchOverTagは、HEADに同名のタグnameを付けてから、コミットを1つ足したブランチnameを作って切り替える。
+func branchOverTag(t *testing.T, repo, name string) {
+	t.Helper()
+	gitRun(t, repo, "tag", name)
+	gitRun(t, repo, "checkout", "--quiet", "-b", name)
+	writeFile(t, repo, name+".txt", name+"\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "--quiet", "-m", name)
+}
+
+func TestAheadWithSameNamedTag(t *testing.T) {
+	t.Parallel()
+	repo := newRepoOn(t, "main")
+	branchOverTag(t, repo, "prev")
+	gitRun(t, repo, "checkout", "--quiet", "-b", "plan-1-1")
+
+	if n, err := Ahead(context.Background(), repo, "prev"); err != nil || n != 0 {
+		t.Errorf("Ahead() = %d, %v、期待値 = 0 (同名タグではなくブランチprevから数える)", n, err)
+	}
+}
+
 func TestExists(t *testing.T) {
 	t.Parallel()
 	repo := newRepoOn(t, "main")
