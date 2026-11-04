@@ -323,7 +323,7 @@ func parseBases(s string) ([]BaseBranch, error) {
 	var bases []BaseBranch
 	var errs []error
 	seen := map[string]bool{}
-	for item := range strings.SplitSeq(s, ",") {
+	for item := range strings.SplitSeq(s, ", ") {
 		item = strings.TrimSpace(item)
 		dir, name, ok := strings.Cut(item, "=")
 		dir, name = filepath.Clean(strings.TrimSpace(dir)), strings.TrimSpace(name)

@@ -401,6 +401,8 @@ func TestParse_Bases(t *testing.T) {
 			"**計画書名**: next\n**ベースブランチ**: /workspace/go/=prev ,  /korylus-tools=prev-tools\n",
 			[]BaseBranch{{Dir: "/workspace/go", Branch: "prev"}, {Dir: "/korylus-tools", Branch: "prev-tools"}},
 		},
+		{"カンマを含むブランチ名", "**ベースブランチ**: /workspace=prev,extra\n", []BaseBranch{{Dir: "/workspace", Branch: "prev,extra"}}},
+		{"カンマを含むブランチ名と複数のリポジトリ", "**ベースブランチ**: /workspace=prev,extra, /korylus-tools=tools,extra\n", []BaseBranch{{Dir: "/workspace", Branch: "prev,extra"}, {Dir: "/korylus-tools", Branch: "tools,extra"}}},
 		{"HTMLコメントの中は読まない", "<!--\n**ベースブランチ**: /workspace=example\n-->\n", nil},
 		{"最初の節より後ろは読まない", "## 概要\n\n**ベースブランチ**: /workspace=example\n\n", nil},
 	}
