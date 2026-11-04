@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-11-01 -->
+<!-- last_synced: 2026-11-04 -->
 
 # korylus-tools
 
@@ -113,9 +113,30 @@ This is because the checks and the implementation decision log written by the im
 Because `korylusflow` reads pages on `https://wikino.app`, add `--host=https://wikino.app` when you log in if you have changed the default host.
 When the plan cannot be read, for example because you are not logged in or hit the rate limit, it ends with an error without changing the state.
 
+### Base branches
+
+To stack a plan on top of another plan's branch that has not been merged yet, write the branch to create each repository's first task branch from, before the first `## ` heading of the plan.
+The value is a list of `<directory path>=<branch name>` separated by `, `.
+As with a task's prefix, the path is an absolute path to a directory in the repository, and it sets the base of the repository that contains the directory.
+
+```markdown
+**ベースブランチ**: /workspace=prev-feature-1-3, /korylus-tools=prev-feature-1-2
+```
+
+The branch to create a task branch from is decided in the following order.
+The current branch of the working tree is not used.
+
+1. The previous task's branch in the same repository, if it exists locally
+2. The branch written for that repository on the base branch line, if any
+3. Otherwise develop, or main if there is no develop
+
+When a path on the line cannot be resolved to a repository, different branches are written for the same repository, or a branch on the line does not exist locally, it does not proceed automatically and tells the implementer to ask the human.
+A malformed line (no `=`, a path not starting with `/`, an empty branch name, or a duplicated path or line) is an error that makes the plan unreadable.
+The base of a task whose branch has already been prepared does not change even if the line is edited later.
+
 ### Flow of a task
 
-1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>` from the previous task's branch in the same repository (develop for the first task or when the previous task's branch no longer exists locally, or main if there is no develop)
+1. Find the repository from the task's prefix and create the branch `<plan name>-<task number>`; the branch to create it from is decided in the order described in "[Base branches](#base-branches)"
 2. The implementer implements the task with `/korylus-do-plan-task` and commits
 3. A reviewer reviews with `/korylus-review`; Codex does the first review, and later reviews are done by a different role than the previous one
 4. `korylusflow` answers the auto-fixable findings in the review document with the recommended options, and the reviewer fixes the code and commits

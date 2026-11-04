@@ -705,6 +705,141 @@ func TestFlowMissingPreviousBranch(t *testing.T) {
 	})
 }
 
+// setBasesは、計画書の計画書名の行の後ろにベースブランチの行を足す。
+// valueの中の {repo} はリポジトリのルートに置き換える。
+func (fx fixture) setBases(t *testing.T, value string) {
+	t.Helper()
+	b, err := os.ReadFile(fx.planFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := "**ベースブランチ**: " + strings.ReplaceAll(value, "{repo}", fx.repo)
+	src := strings.Replace(string(b), "**計画書名**: demo\n", "**計画書名**: demo\n"+line+"\n", 1)
+	if err := os.WriteFile(fx.planFile, []byte(src), 0o600); err != nil { //#nosec G703 -- テストがt.TempDirの下に決めたパス
+		t.Fatal(err)
+	}
+}
+
+// branchFromは、リポジトリrepoのmainから、コミットを1つ持つブランチnameを作ってmainに戻る。
+// 計画書にリポジトリの中のディレクトリを書けるよう、空のディレクトリsubも作っておく。
+func branchFrom(t *testing.T, repo, name string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "checkout", "--quiet", "-b", name, "main")
+	commit(t, repo, name+".txt")
+	gitRun(t, repo, "checkout", "--quiet", "main")
+}
+
+func TestFlowBaseBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("行に書いたブランチから最初のタスクのブランチを作り、次のタスクは前のタスクのブランチから作る", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t,
+			"- [ ] **1-1**: [{repo}] 最初のタスク",
+			"- [ ] **1-2**: [{repo}/sub] 次のタスク",
+		)
+		branchFrom(t, fx.repo, "prev-1-2")
+		fx.setBases(t, "{repo}/sub=prev-1-2")
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Record.Base != "prev-1-2" {
+			t.Fatalf("指示 = %+v、prev-1-2から作ったタスク1-1の実装を期待", in)
+		}
+		if got := gitRun(t, fx.repo, "merge-base", "--is-ancestor", "prev-1-2", "demo-1-1"); got != "" {
+			t.Errorf("merge-baseの出力 = %q", got)
+		}
+		commit(t, fx.repo, "first.txt")
+		fx.checkTask(t, "1-1")
+		if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
+			t.Fatalf("実装のDoneのエラー = %v", err)
+		}
+		fx.approve(t, "1-1")
+
+		in = fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Task != "1-2" || in.Record.Base != "demo-1-1" {
+			t.Fatalf("指示 = %+v、demo-1-1から作ったタスク1-2の実装を期待", in)
+		}
+	})
+
+	t.Run("前のタスクのブランチが消えていれば行に書いたブランチから作る", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t,
+			"- [ ] **1-1**: [{repo}] 最初のタスク",
+			"- [ ] **1-2**: [{repo}] 次のタスク",
+		)
+		branchFrom(t, fx.repo, "prev")
+		fx.setBases(t, "{repo}=prev")
+		fx.wait(t, state.RoleImplementer)
+		commit(t, fx.repo, "first.txt")
+		fx.checkTask(t, "1-1")
+		if _, err := fx.done(state.RoleImplementer, "[]"); err != nil {
+			t.Fatalf("実装のDoneのエラー = %v", err)
+		}
+		writeFile(t, fx.repo, "wip.txt", "wip\n")
+		fx.approve(t, "1-1")
+		if in := fx.wait(t, state.RoleImplementer); in.Action != ActionAsk || in.Ask.Kind != state.AskBranch {
+			t.Fatalf("指示 = %+v、ブランチの準備のaskを期待", in)
+		}
+		if err := os.Remove(filepath.Join(fx.repo, "wip.txt")); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, fx.repo, "checkout", "--quiet", "main")
+		gitRun(t, fx.repo, "branch", "--quiet", "-D", "demo-1-1")
+		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+			t.Fatalf("人への確認のDoneのエラー = %v", err)
+		}
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionImplement || in.Task != "1-2" || in.Record.Base != "prev" {
+			t.Fatalf("指示 = %+v、prevから作ったタスク1-2の実装を期待", in)
+		}
+	})
+
+	t.Run("行に書いたブランチがローカルに無ければ人に尋ね、用意されたら作る", func(t *testing.T) {
+		t.Parallel()
+		fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+		fx.setBases(t, "{repo}=prev")
+
+		in := fx.wait(t, state.RoleImplementer)
+		if in.Action != ActionAsk || in.Ask.Kind != state.AskBranch || in.Ask.Reason != "ブランチを作る元のブランチを決められません" ||
+			!strings.Contains(in.Ask.Details[0], "ブランチ prev が "+fx.repo+" にありません") {
+			t.Fatalf("指示 = %+v、ブランチが無いことのaskを期待", in)
+		}
+
+		branchFrom(t, fx.repo, "prev")
+		if _, err := fx.done(state.RoleImplementer, ""); err != nil {
+			t.Fatalf("人への確認のDoneのエラー = %v", err)
+		}
+		if in := fx.wait(t, state.RoleImplementer); in.Action != ActionImplement || in.Record.Base != "prev" {
+			t.Fatalf("指示 = %+v、prevから作った実装を期待", in)
+		}
+	})
+
+	tests := []struct {
+		name, bases, want string
+	}{
+		{"同じリポジトリに別々のブランチを書いていれば人に尋ねる", "{repo}=prev, {repo}/sub=other", "リポジトリ {repo} に別々のブランチを書いています: {repo}=prev, {repo}/sub=other"},
+		{"タスクの無いリポジトリでもパスからリポジトリを求められなければ人に尋ねる", "{repo}=prev, /korylusflow-missing=prev", "計画書のベースブランチの行のパス /korylusflow-missing: "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newFixture(t, "- [ ] **1-1**: [{repo}] タスク")
+			branchFrom(t, fx.repo, "prev")
+			fx.setBases(t, tt.bases)
+
+			in := fx.wait(t, state.RoleImplementer)
+			want := strings.ReplaceAll(tt.want, "{repo}", fx.repo)
+			if in.Action != ActionAsk || in.Ask.Kind != state.AskBranch || !strings.Contains(in.Ask.Details[0], want) {
+				t.Fatalf("指示 = %+v、%q を含むaskを期待", in, want)
+			}
+		})
+	}
+}
+
 func TestFlowAssignee(t *testing.T) {
 	t.Parallel()
 

@@ -117,9 +117,16 @@ func resolveDir(ctx context.Context, dir string) (Target, error) {
 		return Target{}, err
 	}
 	if ignored {
-		return Target{}, fmt.Errorf("%w: %s は %s で無視されています。実体のリポジトリのパスを接頭辞にしてください", ErrOverlaid, dir, repo)
+		return Target{}, fmt.Errorf("%w: %s は %s で無視されています。実体のリポジトリのパスを書いてください", ErrOverlaid, dir, repo)
 	}
 	return Target{Dir: dir, Repo: repo}, nil
+}
+
+// Repoは、ディレクトリdirを含むリポジトリのルートを、タスクの接頭辞と同じ規則で求める。
+// dirに別のリポジトリが重なっていれば、ErrOverlaidを包んだエラーを返す。
+func Repo(ctx context.Context, dir string) (string, error) {
+	target, err := resolveDir(ctx, dir)
+	return target.Repo, err
 }
 
 // Toplevelは、ディレクトリdirを含むリポジトリのルートを返す。
