@@ -13,6 +13,7 @@
 //   - .go: go/parserで解析し、文字列リテラル中の "//" をコメントと誤認しない
 //   - .templ: Goとして不正なため行単位で走査し、行頭 "//" のコメントを拾う
 //   - .sh / .ts: 構文解析でコメントと文字列の本文を抽出する
+//   - .rs: 構文解析でコメントとdocコメントを抽出する (文字列リテラルは見ない)
 //   - .sql / .css / .toml: 日本語を含む行をそのまま検査する
 //
 // コメントの外にあるi18nの訳文やシェルのメッセージも、日本語のスタイルの対象とする。
@@ -72,6 +73,8 @@ const (
 	kindShell
 	// kindTypeScriptはTypeScriptのコメントと文字列を抽出する。
 	kindTypeScript
+	// kindRustはRustのコメントを抽出する。
+	kindRust
 	// kindPlainは日本語を含む行をそのまま検査する。
 	kindPlain
 )
@@ -98,6 +101,8 @@ func kindOf(path string) fileKind {
 		return kindShell
 	case ext == ".ts":
 		return kindTypeScript
+	case ext == ".rs":
+		return kindRust
 	case plainExts[ext]:
 		return kindPlain
 	default:
@@ -361,6 +366,8 @@ func checkFile(path string, kind fileKind) ([]finding, error) {
 	switch kind {
 	case kindShell, kindTypeScript:
 		return checkSyntax(src, kind)
+	case kindRust:
+		return checkRust(src)
 	case kindPlain:
 		return checkPlain(src), nil
 	case kindTempl:
@@ -457,7 +464,7 @@ func isGenerated(src []byte) bool {
 // skipDirは走査しないディレクトリかどうかを返す。
 func skipDir(name string) bool {
 	switch name {
-	case ".git", "node_modules", "vendor", "bin", "tmp", "static":
+	case ".git", "node_modules", "vendor", "bin", "tmp", "static", "target":
 		return true
 	default:
 		return false

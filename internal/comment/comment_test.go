@@ -536,6 +536,7 @@ func TestKindOf(t *testing.T) {
 		{"internal/query/queries/episodes.sql", kindPlain},
 		{"scripts/browse.sh", kindShell},
 		{"web/sidebar-toggle.ts", kindTypeScript},
+		{"crates/korylusfactory-cli/src/main.rs", kindRust},
 		{"web/style.css", kindPlain},
 		{"internal/i18n/locales/ja.toml", kindPlain},
 		{"README.md", kindUnsupported},

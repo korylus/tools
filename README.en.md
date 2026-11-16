@@ -1,4 +1,4 @@
-<!-- last_synced: 2026-11-04 -->
+<!-- last_synced: 2026-11-16 -->
 
 # korylus-tools
 
@@ -35,6 +35,7 @@ What `comment` looks at depends on the format.
 | `.templ`                  | Leading `//` comments                                                                      |
 | `.sh`                     | Comments, literal arguments and other strings, and heredoc text extracted by a Bash parser |
 | `.ts`                     | Comments and string text extracted by a TypeScript parser, including template literals     |
+| `.rs`                     | Comments and doc comments extracted by a Rust parser                                       |
 | `.sql` / `.css` / `.toml` | Lines containing Japanese                                                                  |
 
 Japanese text outside comments is checked because §3 also covers i18n translations and messages printed by shell scripts.
@@ -50,6 +51,9 @@ Other generated files, and Japanese text within SQL, CSS, and TOML code, remain 
 
 String literals in `.go` are not checked.
 Test literals compared against rendered output intentionally keep forms that violate §3 so that they match the template output.
+String literals in `.rs` are not checked either.
+Error messages contain command names and options separated by spaces, and test data intentionally keeps forms that violate §3.
+Code examples in Rust doc comments are excluded using rustdoc's Markdown rules, including fenced and indented code blocks.
 
 For `md`, `--all` checks every `.md` file in full instead of only changed lines, and `--write` fixes semantic line breaks in place.
 Japanese text style violations are reported with the updated line numbers, and remaining violations cause exit code 1.
