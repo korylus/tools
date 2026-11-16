@@ -1,10 +1,11 @@
-<!-- last_synced: 2026-11-04 -->
+<!-- last_synced: 2026-11-16 -->
 
 # korylus-tools
 
 > [日本語](./README.md) | English
 
 A repository that gathers the development tools shared across the Korylus projects.
+Go tools live in the Go module (`cmd/`, `internal/`), and Rust tools live in the Cargo workspace (`crates/`).
 
 korylus-tools is developed in Japanese. The Japanese documents are the canonical ones, and the English documents are translations provided as a guide.
 
@@ -35,6 +36,7 @@ What `comment` looks at depends on the format.
 | `.templ`                  | Leading `//` comments                                                                      |
 | `.sh`                     | Comments, literal arguments and other strings, and heredoc text extracted by a Bash parser |
 | `.ts`                     | Comments and string text extracted by a TypeScript parser, including template literals     |
+| `.rs`                     | Comments and doc comments extracted by a Rust parser                                       |
 | `.sql` / `.css` / `.toml` | Lines containing Japanese                                                                  |
 
 Japanese text outside comments is checked because §3 also covers i18n translations and messages printed by shell scripts.
@@ -50,6 +52,9 @@ Other generated files, and Japanese text within SQL, CSS, and TOML code, remain 
 
 String literals in `.go` are not checked.
 Test literals compared against rendered output intentionally keep forms that violate §3 so that they match the template output.
+String literals in `.rs` are not checked either.
+Error messages contain command names and options separated by spaces, and test data intentionally keeps forms that violate §3.
+Code examples in Rust doc comments are excluded using rustdoc's Markdown rules, including fenced and indented code blocks.
 
 For `md`, `--all` checks every `.md` file in full instead of only changed lines, and `--write` fixes semantic line breaks in place.
 Japanese text style violations are reported with the updated line numbers, and remaining violations cause exit code 1.
@@ -245,9 +250,186 @@ State is kept in `docs/private/plans/files/<plan name>/` so that it remains as h
 Build it with `make install-korylusflow`, which places it at `~/.local/bin/korylusflow` (change the location with `BINDIR=<directory>`).
 Use the built binary instead of running it from the working tree with `go run`, so that the running code does not change when a branch is switched in the middle of the loop.
 
+## korylusfactory
+
+`korylusfactory` is a CLI (written in Rust) for advancing work plans without a person attending to them.
+It picks the work plans approved on the roadmap one at a time and advances each through implementation, review, fixes, and the work report by launching Claude Code and Codex sessions unattended.
+When a decision needs a human, it stops that work plan, shows the reason, and waits for a human to resume it with a command.
+
+```sh
+korylusfactory start
+korylusfactory status [--json]
+korylusfactory resume [--review-limit <count>]
+korylusfactory --version
+```
+
+Run every subcommand at the project root.
+
+### Configuration file
+
+Write the roadmap URL and the roadmap sections that count as approved and as done in `docs/private/factory/config.json` at the project root.
+
+```json
+{
+  "roadmap": "https://wikino.app/s/<space>/pages/<page number>",
+  "sections": ["やってる", "優先度: 高", "優先度: 中"],
+  "done_sections": ["リリース待ち", "やった"]
+}
+```
+
+| Field           | Description                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `roadmap`       | The URL of the roadmap page. Only pages on `https://wikino.app` are accepted                                                                  |
+| `sections`      | The headings (H2) of the sections that count as approved, advanced in the order written. Defaults to 「やってる」「優先度: 高」「優先度: 中」 |
+| `done_sections` | The headings (H2) of the sections that count as done (merged). Defaults to 「リリース待ち」 and 「やった」                                    |
+
+A section missing from the roadmap, a section listed as both approved and done, or an unknown field is treated as a mistake and reported as an error.
+
+The roadmap and work plans are read with the `wikino` command, preferring the draft when there is one.
+Read permission on the token used for `wikino auth login <space>` is enough for korylusfactory itself.
+Sessions launched by `start` read and write drafts of work plans and work reports.
+To use `start`, log in to the `wikino` command used by the sessions with a token that has draft permissions (`draft_page:*`) and permission to read pages and topics (`page:read` and `topic:read`), for each space the sessions work in.
+
+### `start`
+
+`start` keeps running until you stop it.
+It advances the work plan in progress if there is one, and otherwise the first work plan in the roadmap order (see [`status`](#status)).
+When the first work plan in the order cannot be read, it does not skip it and waits for a human to fix the work plan or the roadmap.
+When there is no work plan to advance, it waits for one to appear on the roadmap.
+It rereads the roadmap every 5 minutes.
+
+Tasks that create branches follow korylusflow's [flow of a task](#flow-of-a-task).
+The branch a task's branch is created from is also chosen in the same order as korylusflow's [base branches](#base-branches).
+The worker session runs on Claude Code, and the reviewer session runs on Codex for the first review and on the other agent than the previous review after that.
+Each session is told which skill to run with which arguments, and returns its result as JSON in a fixed shape.
+korylusfactory records a step as done only after checking the result and the repository state (the task branch, commits, uncommitted changes, review documents), and that the only changes to the work plan are the task's checkbox and the implementation decision log.
+For tasks the implementer does without creating a branch, the session checks the task in the work plan.
+korylusfactory checks the completion conditions before moving on to the next task.
+At the end of the work plan, the worker writes the work report, and when it includes the walkthrough, a reviewer reviews the work report.
+
+Progress goes to standard output, and errors and warnings go to standard error.
+When it starts and before it begins a work plan, it warns if korylusfactory is outdated (see [Warning when outdated](#warning-when-outdated)).
+You cannot run `start` twice for the same project.
+
+### Sessions
+
+Sessions run without asking for confirmation, so use korylusfactory in an isolated environment such as a VM.
+Pushing and creating or merging pull requests are forbidden in the instructions, and are also blocked by the following.
+
+- Claude Code's deny rules (`git push`, `gh pr create`, `gh pr merge`)
+- A Git entry point placed at the front of the session's `PATH`, which refuses pushes, including `git -C <dir> push`
+- A supplementary Git setting that rewrites push destinations to a nonexistent remote helper, and an invalid `GH_TOKEN`
+
+A session has a time limit of 2 hours.
+When a session ends without returning a result, exceeds the time limit, or does not meet the completion conditions, korylusfactory waits 5 minutes and redoes the same step, adding the unmet conditions to the instructions.
+If the step is still not done after 3 retries, it waits for a human.
+
+Each session's instructions, result shape, standard output, and standard error are kept under `docs/private/factory/plans/<plan name>/sessions/`.
+
+### Stopping
+
+Stop `start` with a signal such as Ctrl-C.
+The running session is ended, down to the child processes the session started.
+The state stays as it was before the session's result was recorded, and the next run redoes the same step, telling the session that it was interrupted.
+Until the stopped session has been fully ended, the next `start` cannot run.
+
+### Human waits and `resume`
+
+When a decision needs a human, korylusfactory stops that work plan, shows the reason, and checks the state file every 5 seconds until the wait is lifted.
+
+| Situation                                | What the human does                                                         | Resuming                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| A task done by a person                  | Do the work and check the task in the work plan                             | `resume`                                                       |
+| Preparing a task                         | Clean up uncommitted changes, or fix the task prefix or the base branch     | `resume`                                                       |
+| A review finding that needs a human      | Answer the response options in the review document                          | `resume`                                                       |
+| The review limit                         | Decide whether to continue or stop                                          | `resume` (`--review-limit` to continue)                        |
+| The retry limit                          | Remove the cause of the stop                                                | `resume`                                                       |
+| A question from a session                | Handle the question the session wrote in its result                         | `resume`                                                       |
+| Checking the work report (with feedback) | Add a feedback phase to the work plan                                       | `resume`                                                       |
+| Checking the work report (done)          | Create and merge the PR, and move the item to a done section on the roadmap | Not needed (see [Reporting completion](#reporting-completion)) |
+
+`resume` resumes the work plan waiting for a human, according to the situation it was waiting in.
+
+- For a task done by a person and for preparing a task, it picks again from the first unfinished task in the work plan
+- For review waits, it reads the human's answers and answers the response options again. When waiting at the review limit, raising the limit with `--review-limit <count>` re-reviews after the fixes, and not raising it moves on after the fixes without re-reviewing
+- For the retry limit and a question from a session, it redoes the same step in a new session
+- For checking the work report, it confirms that only a feedback phase was added to the work plan, then continues from that task
+
+When the conditions for resuming are not met, it shows the reason and leaves the state unchanged.
+It is an error when no work plan, or more than one, is waiting for a human.
+
+### Reporting completion
+
+korylusfactory learns that a work plan is done (merged) from the roadmap, not from a command.
+While waiting for the work report to be checked, `start` reads the roadmap every 5 minutes, and when both of the following hold, it records the completion and moves on to the next work plan.
+
+1. A Wikilink to the work plan is in an item of a done section
+2. For each repository where tasks created branches, the last task's branch is merged into the default base (develop, or main if there is none) on the remote `origin`
+
+When 1 holds but 2 does not, it shows the branches that are not merged and waits.
+A work plan without tasks that create branches is done with 1 alone.
+A work plan recorded as done is not advanced even if it is in an approved section of the roadmap.
+
+### `status`
+
+It shows the korylusfactory version, the order of the work plans to advance, and the work plans in progress.
+
+The order lists the Wikilinks whose titles end with 「作業計画書」 in the items of the approved sections, by section order and then from top to bottom within each section.
+Items with only a name (plans not written yet), links to tickets, and nested items are skipped.
+When several links point to the same work plan, only the first is kept.
+Work plans recorded as done are left out of the order.
+
+Each work plan is shown as one of the following.
+
+| Shown                              | Meaning                                                                      |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| The plan name and URL              | The work plan was read                                                       |
+| 作業計画書のページが見つかりません | There is neither a draft nor a page with the link's title                    |
+| 作業計画書として読み取れません     | The page exists but cannot be read as a work plan. The URL and reason follow |
+
+Each work plan in progress is shown with its current step and the reason it is waiting for a human.
+When it is waiting for the work report to be checked, `status` checks for completion and shows the branches that are not merged.
+
+With `--json`, the same content is written as JSON.
+When the roadmap cannot be read (not logged in, Wikino is down, and so on), it writes the reason to standard error and exits with code 1.
+
+### Warning when outdated
+
+`status` and `start` look up the last commit that changed the Rust code (`crates/`, `Cargo.toml`, `Cargo.lock`) on `main` of the repository it was built from.
+If the installed korylusfactory does not contain that commit, they warn you to reinstall with `make install-korylusfactory`.
+They only warn and do not reinstall automatically.
+
+Before comparing, they fetch the remote `main`, and compare with the local `main` when fetching fails.
+When they cannot check (for example, the source repository is missing), they do not warn and instead show that they could not check and why.
+
+### Where the state is kept
+
+The state is kept in `docs/private/factory/` at the project root.
+
+| File                           | Contents                                                                                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.json`                  | The configuration file                                                                                                                        |
+| `plans/<plan name>/state.json` | The progress of each work plan (current task and step, retry count, reason for waiting for a human, time of completion) and a record per task |
+| `plans/<plan name>/sessions/`  | A record per session                                                                                                                          |
+| `plans/<plan name>/state.lock` | An empty file used for file locking                                                                                                           |
+| `start.lock`, `session.lock`   | Empty files used for file locking, to detect a second `start` and the cleanup of a stopped session                                            |
+
+The per-task records use the same field names as `tasks` in korylusflow's `flow.json`, so that the work report skills can read them as material.
+
+### `--version`
+
+`--version` shows the version number, the commit it was built from, the build date, and the location of the repository it was built from.
+`-V` shows the same on one line, without the repository location.
+
+### Installing
+
+Build it with `make install-korylusfactory`, which places it at `~/.local/bin/korylusfactory` (change the location with `BINDIR=<directory>`).
+It is built with the Rust version in `mise.toml` (`mise install rust`).
+Use the built executable so that switching branches while `start` is running does not change the code being run.
+
 ## Installing and running
 
-Building requires Go, a C compiler (GCC or Clang), and `CGO_ENABLED=1`.
+Building koryluslint requires Go, a C compiler (GCC or Clang), and `CGO_ENABLED=1`.
 Shell and TypeScript parsing use the [Go bindings for Tree-sitter](https://github.com/tree-sitter/go-tree-sitter).
 
 Each project pins a version of `koryluslint` to fetch it.
@@ -258,11 +440,15 @@ Each project pins a version of `koryluslint` to fetch it.
 ## Development
 
 ```sh
-make build       # build koryluslint (to bin/koryluslint)
-make install-korylusflow  # build korylusflow (to ~/.local/bin/korylusflow)
-make test        # run the tests
-make vet         # run go vet
-make lint        # run golangci-lint
-make fmt         # format with gofmt + goimports + Oxfmt
-make fmt-check   # check formatting
+make build                   # build koryluslint (to bin/koryluslint)
+make install-korylusflow     # build korylusflow (to ~/.local/bin/korylusflow)
+make install-korylusfactory  # build korylusfactory (to ~/.local/bin/korylusfactory)
+make test                    # run the Go and Rust tests
+make vet                     # run go vet
+make lint                    # run golangci-lint and clippy
+make fmt                     # format with gofmt + goimports + rustfmt + Oxfmt
+make fmt-check               # check formatting
 ```
+
+Append `-go` or `-rust` to `test`, `lint`, or `fmt-check` to run only one of them (e.g. `make test-rust`).
+`fmt-check-md` checks only the formatting of Markdown and other documents.

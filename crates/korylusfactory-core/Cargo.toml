@@ -1,0 +1,18 @@
+[package]
+name = "korylusfactory-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jiff = { workspace = true, features = ["serde"] }
+korylus-workdoc = { path = "../korylus-workdoc" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
