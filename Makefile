@@ -15,23 +15,48 @@ install-korylusflow: ## korylusflowをビルドしてBINDIR (既定は~/.local/b
 	go build -o $(BINDIR)/korylusflow ./cmd/korylusflow
 
 .PHONY: test
-test: ## テストを実行
+test: test-go test-rust ## テストを実行 (GoとRust)
+
+.PHONY: test-go
+test-go: ## Goのテストを実行
 	go test ./...
+
+.PHONY: test-rust
+test-rust: ## Rustのテストを実行
+	cargo test --workspace --locked
 
 .PHONY: vet
 vet: ## go vetを実行
 	go vet ./...
 
 .PHONY: lint
-lint: ## golangci-lintを実行
+lint: lint-go lint-rust ## リントを実行 (GoとRust)
+
+.PHONY: lint-go
+lint-go: ## golangci-lintを実行
 	golangci-lint run --config=.golangci.yml ./...
 
+.PHONY: lint-rust
+lint-rust: ## clippyを実行
+	cargo clippy --workspace --all-targets --locked -- -D warnings
+
 .PHONY: fmt
-fmt: ## コード・ドキュメントをフォーマット (gofmt + goimports + Oxfmt)
+fmt: ## コード・ドキュメントをフォーマット (gofmt + goimports + rustfmt + Oxfmt)
 	golangci-lint fmt --config=.golangci.yml
+	cargo fmt --all
 	pnpm fmt
 
 .PHONY: fmt-check
-fmt-check: ## フォーマットチェック (gofmt + Oxfmt)
+fmt-check: fmt-check-go fmt-check-rust fmt-check-md ## フォーマットチェック (gofmt + rustfmt + Oxfmt)
+
+.PHONY: fmt-check-go
+fmt-check-go: ## Goのフォーマットチェック (gofmt)
 	@diff=$$(gofmt -l .); if [ -n "$$diff" ]; then echo "gofmt差分あり:"; echo "$$diff"; exit 1; fi
+
+.PHONY: fmt-check-rust
+fmt-check-rust: ## Rustのフォーマットチェック (rustfmt)
+	cargo fmt --all --check
+
+.PHONY: fmt-check-md
+fmt-check-md: ## ドキュメントのフォーマットチェック (Oxfmt)
 	pnpm fmt:check

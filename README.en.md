@@ -5,6 +5,7 @@
 > [日本語](./README.md) | English
 
 A repository that gathers the development tools shared across the Korylus projects.
+Go tools live in the Go module (`cmd/`, `internal/`), and Rust tools live in the Cargo workspace (`crates/`).
 
 korylus-tools is developed in Japanese. The Japanese documents are the canonical ones, and the English documents are translations provided as a guide.
 

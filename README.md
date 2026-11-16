@@ -5,6 +5,7 @@
 > 日本語 | [English](./README.en.md)
 
 Korylusプロジェクトで共通利用する開発ツールを集約したリポジトリです。
+GoのツールはGoのモジュール (`cmd/`・`internal/`) に、RustのツールはCargoのワークスペース (`crates/`) に置いています。
 
 ## koryluslint
 
