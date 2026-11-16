@@ -6,13 +6,26 @@ help: ## ヘルプを表示
 build: ## koryluslintをビルド (bin/koryluslintに出力)
 	go build -o bin/koryluslint ./cmd/koryluslint
 
-# BINDIRはinstall-korylusflowが実行ファイルを置くディレクトリ。
+# BINDIRはinstall-korylusflowとinstall-korylusfactoryが実行ファイルを置くディレクトリ。
 BINDIR ?= $(HOME)/.local/bin
+
+# ビルドとインストールで、Cargoの出力先を揃える。
+CARGO_TARGET_DIR ?= target
+
+# Cargoの設定や環境変数でビルドのターゲットを変えていても、ホスト向けの実行ファイルを置く。
+# `=` で定義し、install-korylusfactoryを実行するときだけrustcを呼ぶ (Rustを入れていない環境で、ほかのMakeのターゲットにrustcが見つからないエラーを出さないため)。
+RUST_HOST = $(shell rustc -vV | sed -n 's/^host: //p')
 
 .PHONY: install-korylusflow
 install-korylusflow: ## korylusflowをビルドしてBINDIR (既定は~/.local/bin) に置く
 	mkdir -p $(BINDIR)
 	go build -o $(BINDIR)/korylusflow ./cmd/korylusflow
+
+.PHONY: install-korylusfactory
+install-korylusfactory: ## korylusfactoryをビルドしてBINDIR (既定は~/.local/bin) に置く
+	cargo build --release --locked -p korylusfactory-cli --target-dir "$(CARGO_TARGET_DIR)" --target "$(RUST_HOST)"
+	mkdir -p "$(BINDIR)"
+	install -m 755 "$(CARGO_TARGET_DIR)/$(RUST_HOST)/release/korylusfactory" "$(BINDIR)/korylusfactory"
 
 .PHONY: test
 test: test-go test-rust ## テストを実行 (GoとRust)
