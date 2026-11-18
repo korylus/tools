@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use korylusfactory_core::state::{PlanState, Step, Wait};
+use korylusfactory_core::state::{ItemPage, PlanState, Step, Wait};
 use serde::Serialize;
 
 use crate::completion::{Completion, Unmerged};
@@ -122,6 +122,9 @@ pub fn progress_text(progress: &[Progress]) -> String {
             for detail in &wait.details {
                 let _ = writeln!(out, "    {detail}");
             }
+            if let Some(page) = item_page(&p.state) {
+                let _ = writeln!(out, "  人間キューの項目: {}", page.url);
+            }
         }
         match &p.completion {
             Some(Ok(Completion::Unmerged(branches))) => {
@@ -153,6 +156,11 @@ pub fn progress_text(progress: &[Progress]) -> String {
     out
 }
 
+/// 状態stateの今の人間待ちに積んだ項目のページを返す。まだ積めていなければ `None` を返す。
+fn item_page(state: &PlanState) -> Option<&ItemPage> {
+    state.waiting_item()?.item.page.as_ref()
+}
+
 /// 進めているタスクtaskとステップstepを、「タスク 1-2 のレビュー」「作業報告書のレビュー」の形にする。
 fn describe_step(task: Option<&str>, step: Option<Step>) -> String {
     match (task, step) {
@@ -171,6 +179,8 @@ struct ProgressJson<'a> {
     task: Option<&'a str>,
     step: Option<Step>,
     wait: Option<&'a Wait>,
+    /// 今の人間待ちに積んだ人間キューの項目のページ。
+    item: Option<&'a ItemPage>,
     completion: Option<CompletionJson<'a>>,
 }
 
@@ -210,6 +220,7 @@ impl<'a> ProgressJson<'a> {
             task: progress.state.task.as_deref(),
             step: progress.state.step,
             wait: progress.state.wait.as_ref(),
+            item: item_page(&progress.state),
             completion,
         }
     }
@@ -320,6 +331,7 @@ impl<'a> Report<'a> {
 mod tests {
     use super::*;
     use korylusfactory_core::queue::{Candidate, WikiLink};
+    use korylusfactory_core::state::{QueuedItem, WaitItem};
     use std::path::PathBuf;
 
     fn build() -> Build {
@@ -559,10 +571,25 @@ mod tests {
             "https://wikino.app/s/shimbaco/pages/21",
             "確認待ち 作業計画書",
         );
-        reported.wait = Some(Wait {
+        let wait = Wait {
             kind: korylusfactory_core::state::WaitKind::Report,
             reason: "作業報告書の確認を待っています".to_owned(),
             details: vec!["作業報告書: https://wikino.app/s/shimbaco/pages/30".to_owned()],
+        };
+        reported.wait = Some(wait.clone());
+        reported.items.push(WaitItem {
+            wait,
+            item: QueuedItem {
+                location: None,
+                title: "mewst - reported - 作業報告書の確認 - 2026-11-17 21時04分05秒".to_owned(),
+                at: "2026-11-17T21:04:05"
+                    .parse()
+                    .expect("日時を読み取れなかった"),
+                page: Some(ItemPage {
+                    number: 40,
+                    url: "https://wikino.app/s/shimbaco/pages/40/edit".to_owned(),
+                }),
+            },
         });
         vec![
             Progress {
@@ -605,6 +632,7 @@ mod tests {
                 "  現在のステップ: なし\n",
                 "  人間を待っています (作業報告書の確認): 作業報告書の確認を待っています\n",
                 "    作業報告書: https://wikino.app/s/shimbaco/pages/30\n",
+                "  人間キューの項目: https://wikino.app/s/shimbaco/pages/40/edit\n",
                 "  リモートの既定のベースに取り込まれていないブランチ:\n",
                 "    /korylus-tools reported-1-2 (origin/main)\n",
                 "    /workspace reported-1-1 (origin/develop。ローカルにありません)\n",
@@ -652,6 +680,7 @@ mod tests {
                     "task": "1-2",
                     "step": "review",
                     "wait": null,
+                    "item": null,
                     "completion": null,
                 },
                 {
@@ -664,6 +693,7 @@ mod tests {
                         "reason": "作業報告書の確認を待っています",
                         "details": ["作業報告書: https://wikino.app/s/shimbaco/pages/30"],
                     },
+                    "item": {"number": 40, "url": "https://wikino.app/s/shimbaco/pages/40/edit"},
                     "completion": {
                         "state": "unmerged",
                         "branches": [

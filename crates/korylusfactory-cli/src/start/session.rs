@@ -44,6 +44,7 @@ impl Launch {
             plan_url: &state.url,
             state_path: &state_path,
             retry: &state.retry_reasons,
+            answers: &state.answers,
         };
         let Some(request) = instruction::build(next, state, &context)? else {
             return Ok(None);

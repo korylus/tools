@@ -32,10 +32,14 @@ use crate::process::{self, Ended, Launcher, Session};
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_hours(2);
 
 /// Claude Codeで拒否するコマンド。
-const CLAUDE_DENIED: [&str; 3] = [
+///
+/// 人間の回答で再開するコマンドも、セッションが人間に代わって実行しないよう拒否する。
+const CLAUDE_DENIED: [&str; 5] = [
     "Bash(git push:*)",
     "Bash(gh pr create:*)",
     "Bash(gh pr merge:*)",
+    "Bash(korylusfactory resume:*)",
+    "Bash(korylusfactory queue answer:*)",
 ];
 
 /// pushの宛先を書き換える先の、存在しないリモートヘルパーの名前。
@@ -393,6 +397,8 @@ mod tests {
                 "Bash(git push:*)",
                 "Bash(gh pr create:*)",
                 "Bash(gh pr merge:*)",
+                "Bash(korylusfactory resume:*)",
+                "Bash(korylusfactory queue answer:*)",
             ]
         );
         assert_eq!(

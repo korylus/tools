@@ -1,10 +1,12 @@
 use std::env;
 use std::error::Error;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal as _, Write};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use clap::{Parser, Subcommand};
+use jiff::tz::TimeZone;
+use korylusfactory_cli::human_queue::{WikinoStore, command as queue};
 use korylusfactory_cli::process::System;
 use korylusfactory_cli::start::{self, Start, SystemClock, Timing};
 use korylusfactory_cli::version::{self, Build};
@@ -55,6 +57,42 @@ enum Command {
         #[arg(long)]
         review_limit: Option<u32>,
     },
+    /// 人間キューの項目の一覧と内容を表示し、回答を項目の下書きに書く。プロジェクトのルートで実行する
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum QueueCommand {
+    /// 人間待ちの項目の一覧を、積んだ順に表示する。既定はこのプロジェクトの項目
+    List {
+        /// 全プロジェクトの項目を表示する
+        #[arg(long)]
+        all: bool,
+        /// JSONで出す
+        #[arg(long)]
+        json: bool,
+    },
+    /// 項目の内容と、回答の欄を表示する
+    Show {
+        /// 項目のページ番号
+        number: u64,
+        /// JSONで出す
+        #[arg(long)]
+        json: bool,
+    },
+    /// 回答の形を確かめて、書き手と時刻を記して項目の下書きに書く。公開はしない
+    Answer {
+        /// 項目のページ番号
+        number: u64,
+        /// 欄の順に並べた回答。選択の欄にはラベル (A など)、自由記述の欄には回答の文を渡す。`-` で始まる文は `--` のあとに渡す
+        responses: Vec<String>,
+        /// JSONで出す
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -80,6 +118,7 @@ fn main() -> ExitCode {
         Command::Start => run_start(),
         Command::Status { json } => run_status(json),
         Command::Resume { review_limit } => run_resume(review_limit),
+        Command::Queue { command } => run_queue(command),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -100,6 +139,11 @@ fn run_start() -> Result<(), Box<dyn Error>> {
         runner: &System,
         launcher: &System,
         clock: &SystemClock,
+        queues: &System,
+        notifier: &System,
+        terminal: io::stderr().is_terminal(),
+        // 項目の日時は、実行している環境のタイムゾーン (環境変数TZか、システムの設定) で書く。
+        time_zone: &TimeZone::system(),
         build: &build,
         root: &root,
         timing: Timing::default(),
@@ -171,5 +215,54 @@ fn run_resume(review_limit: Option<u32>) -> Result<(), Box<dyn Error>> {
         resumed.name,
         resumed.kind.label()
     );
+    Ok(())
+}
+
+/// `korylusfactory queue` を、今のディレクトリをプロジェクトのルートとして実行する。
+fn run_queue(command: QueueCommand) -> Result<(), Box<dyn Error>> {
+    let root = env::current_dir()?;
+    let config = config::load(&root)?;
+    let (project, location) = config
+        .project
+        .and_then(|project| Some((project.name, project.queue?)))
+        .ok_or("設定ファイルに「project」と「queue」がありません。人間キューの置き場を「queue」に書いてください")?;
+    let store = WikinoStore::new(&System, &location);
+    let mut stdout = io::stdout().lock();
+    match command {
+        QueueCommand::List { all, json } => {
+            let entries = queue::list(&store, &location, &project, all)?;
+            if json {
+                serde_json::to_writer_pretty(&mut stdout, &entries)?;
+                stdout.write_all(b"\n")?;
+            } else {
+                stdout.write_all(queue::list_text(&entries).as_bytes())?;
+            }
+        }
+        QueueCommand::Show { number, json } => {
+            let shown = queue::show(&store, &location, number)?;
+            if json {
+                serde_json::to_writer_pretty(&mut stdout, &shown)?;
+                stdout.write_all(b"\n")?;
+            } else {
+                stdout.write_all(queue::show_text(&shown).as_bytes())?;
+            }
+        }
+        QueueCommand::Answer {
+            number,
+            responses,
+            json,
+        } => {
+            let writer = queue::writer(|name| env::var_os(name));
+            // 書き手の日時は、実行している環境のタイムゾーンで書く。
+            let at = jiff::Zoned::now().datetime();
+            let answered = queue::answer(&store, &location, number, &responses, writer, at)?;
+            if json {
+                serde_json::to_writer_pretty(&mut stdout, &answered)?;
+                stdout.write_all(b"\n")?;
+            } else {
+                stdout.write_all(queue::answered_text(&answered).as_bytes())?;
+            }
+        }
+    }
     Ok(())
 }

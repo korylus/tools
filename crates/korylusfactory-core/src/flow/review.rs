@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
+use korylus_workdoc::queue::{FieldKind, Form, Response};
 use korylus_workdoc::review::{self, Answers, Category, Document, Finding};
 
 use super::report;
@@ -15,8 +16,14 @@ use super::{
     plan_reasons, start, wait,
 };
 use crate::state::{
-    DeferredFinding, PlanState, ReviewRecord, ReviewTrail, Reviewer, Step, Verdict, WaitKind,
+    DeferredFinding, HumanFinding, HumanReview, PlanState, ReviewRecord, ReviewTrail, Reviewer,
+    Step, Verdict, WaitKind,
 };
+
+/// 人間キューの項目では選べない、選択肢に無い対応を表す選択肢の書き出し。
+///
+/// 対応の文はレビュードキュメントの回答の欄に書くもので、項目には書く欄が無いためである。
+const OTHER: &str = "その他";
 
 /// 人間が延ばしていないときの、1つのタスクか作業報告書の1回で行うレビューの上限の回数。
 pub const DEFAULT_REVIEW_LIMIT: u32 = 3;
@@ -218,6 +225,7 @@ pub fn resume(
     }
     let mut resumed = state.clone();
     resumed.wait = None;
+    resumed.notified = None;
     match kind {
         WaitKind::HumanTask | WaitKind::Branch | WaitKind::RetryLimit | WaitKind::Question => {}
         WaitKind::Report => report::check_feedback(&resumed, doc)?,
@@ -250,6 +258,173 @@ pub fn resume(
     }
     *state = resumed;
     Ok(())
+}
+
+/// レビューの要人間判断の指摘で待っている状態stateについて、人間キューの項目の回答の欄に載せる指摘を、欄の順に返す。
+///
+/// 待ちを始めたときの指摘の写しがあれば、回答を照合する ([`choose_findings`]) のと同じ写しを返す。
+/// 回答をレビュードキュメントに書いたあと差し戻した待ちで項目を積み直しても、欄が照合する指摘と揃うようにするためである。
+/// 写しの無い以前の待ちでは、最後のレビュードキュメントで人間の回答を待つ指摘を返す。
+pub(crate) fn human_findings(
+    state: &PlanState,
+    project: &Project,
+) -> Result<Vec<HumanFinding>, Error> {
+    let target = target(state, Step::Fix)?;
+    if let Some(saved) = &trail(state, &target)?.human_review {
+        return Ok(saved.findings.clone());
+    }
+    let path = last_review(state, &target)?.doc.clone();
+    Ok(read_review(project, &path)?
+        .answer()
+        .pending
+        .iter()
+        .map(HumanFinding::from)
+        .collect())
+}
+
+/// 要人間判断の指摘で待っている状態stateについて、人間キューの項目の回答の欄formで選んだ選択肢を、最後のレビュードキュメントに書く。
+///
+/// 待ちを始めたときの指摘を照合し、欄の見出しと選択肢の数・本文が、その指摘と同じであることを確かめる。
+/// すでにチェックを書いた指摘も対象に含め、状態保存前の中断や差し戻しのあとに回答を適用し直せる。
+/// 確かめられないときと、選択肢に無い対応 (「その他」) を選んだときは、書かずに [`Error::Rejected`] で理由を返す。
+/// 回答の欄は、[`Form::answers`] で形を確かめてから渡す。
+pub(super) fn choose_findings(
+    state: &PlanState,
+    project: &Project,
+    form: &Form,
+    responses: &[Response],
+) -> Result<(), Error> {
+    let target = target(state, Step::Fix)?;
+    let path = last_review(state, &target)?.doc.clone();
+    let document = read_review(project, &path)?;
+    let pending = answer_findings(state, &target, &path, &document)?;
+    if form.fields.len() != pending.len() {
+        return Err(Error::Rejected(vec![format!(
+            "回答の欄が{}個ありますが、レビュードキュメント {} で人間の回答を待つ指摘は{}個です",
+            form.fields.len(),
+            path.display(),
+            pending.len()
+        )]));
+    }
+    let mut choices = Vec::new();
+    let mut reasons = Vec::new();
+    for (i, ((field, finding), response)) in form
+        .fields
+        .iter()
+        .zip(pending.iter().copied())
+        .zip(responses)
+        .enumerate()
+    {
+        let heading = format!("指摘{}: {}", i + 1, finding.title);
+        if !field.heading_matches(&heading) {
+            reasons.push(format!(
+                "回答の欄「{}」が、元の指摘の欄「{heading}」と違います。欄の順番と見出しを元に戻してください",
+                field.heading
+            ));
+            continue;
+        }
+        let matched = match &field.kind {
+            FieldKind::Choices(options) => {
+                options.len() == finding.options.len()
+                    && options
+                        .iter()
+                        .zip(&finding.options)
+                        .all(|(option, original)| option.matches(&original.text))
+            }
+            FieldKind::Text(_) => false,
+        };
+        let chosen = match response {
+            Response::Choice(chosen) if matched => *chosen,
+            _ => {
+                reasons.push(format!(
+                    "「{}」の選択肢が、レビュードキュメント {} の指摘「{}」の選択肢と違います。選択肢を書き換えずに、1つにチェックを付けてください",
+                    field.heading,
+                    path.display(),
+                    finding.title
+                ));
+                continue;
+            }
+        };
+        if finding.options[chosen].text.starts_with(OTHER) {
+            reasons.push(format!(
+                "「{}」: 「{}」を選んだときの対応の文を書く欄が、項目にありません。ほかの選択肢を選ぶか、レビュードキュメント {} の回答の欄に対応を書いて korylusfactory resume で再開してください",
+                field.heading,
+                finding.options[chosen].text,
+                path.display()
+            ));
+            continue;
+        }
+        choices.push((finding, chosen));
+    }
+    if !reasons.is_empty() {
+        return Err(Error::Rejected(reasons));
+    }
+    let full = project.root.join(&path);
+    fs::write(&full, document.choose(&choices))
+        .map_err(|source| Error::WriteReview { path: full, source })
+}
+
+/// 待ちを始めたときの対象に対応する、今のドキュメントdocumentの指摘を返す。
+///
+/// 回答済みかどうかで対象を取り直さない。指摘の場所・本文・選択肢が変わっていれば、書き込まずに差し戻す。
+/// 以前の状態ファイルでは、待ちの詳細に保存済みの場所・見出し・区分で照合する。
+fn answer_findings<'a>(
+    state: &PlanState,
+    target: &Target,
+    path: &Path,
+    document: &'a Document,
+) -> Result<Vec<&'a Finding>, Error> {
+    let saved = trail(state, target)?.human_review.as_ref();
+    let changed = || {
+        Error::Rejected(vec![format!(
+            "レビュードキュメント {} の回答対象が、人間待ちを始めたときと違います。指摘を元に戻すか、レビュードキュメントに回答して korylusfactory resume で再開してください",
+            path.display()
+        )])
+    };
+    if let Some(saved) = saved {
+        if saved.doc != path {
+            return Err(changed());
+        }
+        return saved
+            .findings
+            .iter()
+            .map(|original| {
+                document
+                    .findings
+                    .iter()
+                    .find(|finding| original.matches(finding))
+                    .ok_or_else(changed)
+            })
+            .collect();
+    }
+
+    // スナップショットが無い以前の待ちでも、未回答の指摘だけを取り直すと中断後に再適用できなくなる。
+    let details = state
+        .wait
+        .as_ref()
+        .ok_or(Error::NotWaiting)?
+        .details
+        .iter()
+        .skip(1);
+    if details.len() == 0 {
+        return Err(changed());
+    }
+    details
+        .map(|description| {
+            document
+                .findings
+                .iter()
+                .find(|finding| finding.describe() == *description)
+                .ok_or_else(changed)
+        })
+        .collect()
+}
+
+/// レビューの上限で待っている状態stateについて、上限を1回延ばした回数を返す。
+pub(super) fn extended_limit(state: &PlanState) -> Result<u32, Error> {
+    let target = target(state, Step::Fix)?;
+    let trail = trail(state, &target)?;
+    Ok(limit(trail).max(count(trail)).saturating_add(1))
 }
 
 /// レビューのステップで、次に行うことを返す。
@@ -357,6 +532,10 @@ fn apply(
     answers: &Answers,
 ) -> Result<(), Error> {
     if !answers.pending.is_empty() {
+        trail_mut(state, target)?.human_review = Some(HumanReview {
+            doc: path.to_path_buf(),
+            findings: answers.pending.iter().map(HumanFinding::from).collect(),
+        });
         let mut details = vec![format!("レビュードキュメント: {}", path.display())];
         details.extend(answers.pending.iter().map(Finding::describe));
         wait(
@@ -375,6 +554,7 @@ fn apply(
             .map_err(|source| Error::WriteReview { path: full, source })?;
     }
     let trail = trail_mut(state, target)?;
+    trail.human_review = None;
     for decision in answers
         .decisions
         .iter()
@@ -552,6 +732,7 @@ mod tests {
     };
     use super::super::{Prepared, finish_implement, finish_prepare, next};
     use super::*;
+    use std::fmt::Write as _;
 
     /// PLANのタスク1-1のレビュー接頭辞。タスクのリポジトリが本体と別のため、リポジトリ名を足す。
     const PREFIX: &str = "korylus-tools-demo-1-1";
@@ -1087,6 +1268,404 @@ mod tests {
                 Reviewer::Codex,
                 Reviewer::Claude
             ]
+        );
+    }
+
+    /// 要人間判断の指摘への回答の欄を、選んだ選択肢chosenで書いた項目の本文。optionsは欄の選択肢。
+    fn review_body(options: &[&str], chosen: usize) -> String {
+        let mut body = "## 回答\n\n### 指摘1: 3. 設計を変える\n\n> 要点\n\n".to_owned();
+        for (i, option) in options.iter().enumerate() {
+            let mark = if i == chosen { "x" } else { " " };
+            let label = char::from(b'A' + u8::try_from(i).expect("選択肢が多すぎる"));
+            let _ = writeln!(body, "- [{mark}] {label}: {option}");
+        }
+        body
+    }
+
+    /// 要人間判断の指摘neededを含むレビューで、人間を待っている状態と、レビュードキュメントのパス。
+    fn waiting_review(project: &Project, needed: &str) -> (PlanState, PathBuf) {
+        let mut state = reviewing(project);
+        let path = write_review(
+            project,
+            1,
+            "Request Changes",
+            &format!("{AUTO_FIX}{needed}"),
+        );
+        finish_review(&mut state, project, now()).expect("レビューの完了を受け付けなかった");
+        assert_eq!(
+            state.wait.as_ref().map(|wait| wait.kind),
+            Some(WaitKind::Review),
+            "人間を待っていない"
+        );
+        (state, path)
+    }
+
+    #[test]
+    fn 項目で選んだ選択肢をレビュードキュメントに書いて修正に進む() {
+        let (_root, project) = project();
+        let (mut state, path) = waiting_review(&project, NEEDS_HUMAN);
+        let body = review_body(&["設計を変える (推奨)", "現状維持"], 1);
+        super::super::resume_with(&mut state, &done(), &project, &body)
+            .expect("回答で再開できなかった");
+        assert_eq!(state.wait, None, "人間を待ったまま");
+        assert_eq!(
+            step_of(&state),
+            (Some("1-1"), Some(Step::Fix)),
+            "修正に進まない"
+        );
+        let written = read(&project, &path);
+        assert!(
+            written.contains("- [ ] 設計を変える (推奨)\n- [x] 現状維持"),
+            "選んだ選択肢を書いていない:\n{written}"
+        );
+        assert!(
+            written.contains("- [x] 修正案の通り直す (推奨)"),
+            "自動対応可の指摘に回答していない:\n{written}"
+        );
+    }
+
+    #[test]
+    fn 回答を書いたあと状態を保存せずに中断しても同じ回答で再開できる() {
+        for legacy in [false, true] {
+            let (_root, project) = project();
+            let (mut state, path) = waiting_review(&project, NEEDS_HUMAN);
+            if legacy {
+                trail_mut(&mut state, &Target::Task("1-1".to_owned()))
+                    .expect("レビューの記録が無い")
+                    .human_review = None;
+            }
+            let store = crate::state::Store::new(&project.root);
+            let dir = store.plan("demo").expect("状態の置き場を求められなかった");
+            dir.lock()
+                .expect("ロックを取れなかった")
+                .save(&state)
+                .expect("人間待ちを保存できなかった");
+            let body = review_body(&["設計を変える (推奨)", "現状維持"], 1);
+            super::super::resume_with(&mut state, &done(), &project, &body)
+                .expect("最初の回答を適用できなかった");
+            let written = read(&project, &path);
+            // レビュードキュメントだけ書いたところで停止し、再開後は保存済みの待ちを読み直す。
+            let mut restarted = dir.load().expect("状態を読めなかった").expect("状態が無い");
+            assert!(restarted.wait.is_some(), "保存前の待ちを再現できていない");
+            super::super::resume_with(&mut restarted, &done(), &project, &body)
+                .expect("中断後に同じ回答を再適用できなかった");
+            assert_eq!(restarted, state, "中断で再開後の状態が変わった");
+            assert_eq!(
+                read(&project, &path),
+                written,
+                "同じ回答でドキュメントが変わった"
+            );
+        }
+    }
+
+    #[test]
+    fn 再開の条件で差し戻したあとも回答を選び直してチェックを書き直せる() {
+        let (_root, project) = project();
+        let (mut state, path) = waiting_review(&project, NEEDS_HUMAN);
+        let before = state.clone();
+        let invalid = AUTO_DEFER.replace(" (推奨)", "");
+        let changed =
+            read(&project, &path).replace("## 総合評価", &format!("{invalid}## 総合評価"));
+        fs::write(project.root.join(&path), changed).expect("レビューを更新できなかった");
+        let reasons = rejected(super::super::resume_with(
+            &mut state,
+            &done(),
+            &project,
+            &review_body(&["設計を変える (推奨)", "現状維持"], 0),
+        ));
+        assert!(
+            reasons[0].contains("推奨どおりに回答できない指摘"),
+            "理由 = {reasons:?}"
+        );
+        assert_eq!(state, before, "再開できないのに状態を変えた");
+        let written = read(&project, &path);
+        assert!(
+            written.contains("- [x] 設計を変える (推奨)"),
+            "回答を書いた後の失敗を再現できていない"
+        );
+        fs::write(project.root.join(&path), written.replace(&invalid, ""))
+            .expect("再開を妨げる不備を直せなかった");
+        super::super::resume_with(
+            &mut state,
+            &done(),
+            &project,
+            &review_body(&["設計を変える (推奨)", "現状維持"], 1),
+        )
+        .expect("選び直した回答を適用できなかった");
+        assert!(
+            read(&project, &path).contains("- [ ] 設計を変える (推奨)\n- [x] 現状維持"),
+            "選び直す前のチェックが残った"
+        );
+        assert_eq!(state.wait, None, "人間を待ったまま");
+    }
+
+    #[test]
+    fn 回答を書いたあと差し戻した待ちで積み直した項目にも回答して再開できる() {
+        let (_root, project) = project();
+        let (mut state, path) = waiting_review(&project, NEEDS_HUMAN);
+        let invalid = AUTO_DEFER.replace(" (推奨)", "");
+        let changed =
+            read(&project, &path).replace("## 総合評価", &format!("{invalid}## 総合評価"));
+        fs::write(project.root.join(&path), changed).expect("レビューを更新できなかった");
+        rejected(super::super::resume_with(
+            &mut state,
+            &done(),
+            &project,
+            &review_body(&["設計を変える (推奨)", "現状維持"], 0),
+        ));
+        assert!(
+            read(&project, &path).contains("- [x] 設計を変える (推奨)"),
+            "回答を書いたあとの差し戻しを再現できていない"
+        );
+        fs::write(
+            project.root.join(&path),
+            read(&project, &path).replace(&invalid, ""),
+        )
+        .expect("再開を妨げる不備を直せなかった");
+
+        // 差し戻したあとに項目が無くなり、積み直した項目で選び直して回答する。
+        let item = crate::item::for_wait(
+            "mewst",
+            "demo",
+            &state,
+            state.wait.as_ref().expect("人間を待っていない"),
+            &project,
+            "2026-11-17T21:04:05"
+                .parse()
+                .expect("日時を読み取れなかった"),
+        )
+        .expect("項目を作れなかった");
+        let form = korylus_workdoc::queue::parse(&item.body()).expect("項目を読めなかった");
+        assert_eq!(
+            form.fields.len(),
+            1,
+            "回答を書いた指摘の欄が、積み直した項目から消えた"
+        );
+        let body = form
+            .fill(
+                &[Response::Choice(1)],
+                "プランナー",
+                "2026-11-17T21:05:05"
+                    .parse()
+                    .expect("日時を読み取れなかった"),
+            )
+            .expect("項目に回答できなかった");
+        super::super::resume_with(&mut state, &done(), &project, &body)
+            .expect("積み直した項目の回答で再開できなかった");
+        assert!(
+            read(&project, &path).contains("- [ ] 設計を変える (推奨)\n- [x] 現状維持"),
+            "選び直した回答を書いていない"
+        );
+        assert_eq!(state.wait, None, "人間を待ったまま");
+    }
+
+    #[test]
+    fn 同じ選択肢の指摘でも欄やレビューの指摘を入れ替えた回答を書かない() {
+        let first = NEEDS_HUMAN.to_owned();
+        let second = NEEDS_HUMAN.replace("3. 設計を変える", "4. 実行を変える");
+        let first_field = review_body(&["設計を変える (推奨)", "現状維持"], 0);
+        let second_field = review_body(&["設計を変える (推奨)", "現状維持"], 1)
+            .replace("指摘1: 3. 設計を変える", "指摘2: 4. 実行を変える");
+        for swap_document in [false, true] {
+            let (_root, project) = project();
+            let (mut state, path) = waiting_review(&project, &format!("{first}{second}"));
+            let before = state.clone();
+            let body = if swap_document {
+                write_review(
+                    &project,
+                    1,
+                    "Request Changes",
+                    &format!("{AUTO_FIX}{second}{first}"),
+                );
+                format!(
+                    "{first_field}{}",
+                    second_field.trim_start_matches("## 回答\n")
+                )
+            } else {
+                format!(
+                    "{second_field}{}",
+                    first_field.trim_start_matches("## 回答\n")
+                )
+            };
+            let doc_before = read(&project, &path);
+            let reasons = rejected(super::super::resume_with(
+                &mut state,
+                &done(),
+                &project,
+                &body,
+            ));
+            assert!(!reasons.is_empty(), "入れ替わりの理由が無い");
+            assert_eq!(state, before, "取り違えた回答で状態を進めた");
+            assert_eq!(
+                read(&project, &path),
+                doc_before,
+                "別の指摘にチェックを書いた"
+            );
+        }
+    }
+
+    #[test]
+    fn 同じ見出しと選択肢でも判断の本文が入れ替わった指摘には回答しない() {
+        let first = NEEDS_HUMAN.replace("**区分**:", "判断する内容A。\n\n**区分**:");
+        let second = NEEDS_HUMAN.replace("**区分**:", "判断する内容B。\n\n**区分**:");
+        let (_root, project) = project();
+        let (mut state, path) = waiting_review(&project, &format!("{first}{second}"));
+        write_review(
+            &project,
+            1,
+            "Request Changes",
+            &format!("{AUTO_FIX}{second}{first}"),
+        );
+        let doc_before = read(&project, &path);
+        let field = review_body(&["設計を変える (推奨)", "現状維持"], 0);
+        let body = format!(
+            "{field}{}",
+            field
+                .trim_start_matches("## 回答\n")
+                .replace("指摘1:", "指摘2:")
+        );
+        let reasons = rejected(super::super::resume_with(
+            &mut state,
+            &done(),
+            &project,
+            &body,
+        ));
+        assert!(
+            reasons[0].contains("回答対象が、人間待ちを始めたときと違います"),
+            "理由 = {reasons:?}"
+        );
+        assert_eq!(
+            read(&project, &path),
+            doc_before,
+            "判断の本文が違う指摘に回答した"
+        );
+    }
+
+    #[test]
+    fn 項目の見出しが文字参照でも元の指摘と照合して回答できる() {
+        let (_root, project) = project();
+        let needed = NEEDS_HUMAN.replace("3. 設計を変える", "**[[設計]]** を変える");
+        let (mut state, path) = waiting_review(&project, &needed);
+        let item = crate::item::for_wait(
+            "mewst",
+            "demo",
+            &state,
+            state.wait.as_ref().expect("人間を待っていない"),
+            &project,
+            "2026-11-17T21:04:05"
+                .parse()
+                .expect("日時を読み取れなかった"),
+        )
+        .expect("項目を作れなかった");
+        let form = korylus_workdoc::queue::parse(&item.body()).expect("項目を読めなかった");
+        assert!(
+            form.fields[0].heading.contains("&#91;"),
+            "文字参照を再現できていない"
+        );
+        let body = form
+            .fill(
+                &[Response::Choice(1)],
+                "プランナー",
+                "2026-11-17T21:05:05"
+                    .parse()
+                    .expect("日時を読み取れなかった"),
+            )
+            .expect("項目に回答できなかった");
+        super::super::resume_with(&mut state, &done(), &project, &body)
+            .expect("文字参照の見出しで再開できなかった");
+        assert!(
+            read(&project, &path).contains("- [ ] 設計を変える (推奨)\n- [x] 現状維持"),
+            "元の指摘に回答していない"
+        );
+    }
+
+    #[test]
+    fn 選択肢が書き換えられたか選択肢に無い対応を選んだ回答は書かずに理由を返す() {
+        let other = NEEDS_HUMAN.replace("- [ ] 現状維持", "- [ ] その他 (下の回答欄に記入)");
+        let cases = [
+            (
+                NEEDS_HUMAN.to_owned(),
+                review_body(&["設計を変える (推奨)", "別の方針にする"], 0),
+                "「指摘1: 3. 設計を変える」の選択肢が、レビュードキュメント docs/private/reviews/korylus-tools-demo-1-1-001.md の指摘「3. 設計を変える」の選択肢と違います",
+            ),
+            (
+                other,
+                review_body(&["設計を変える (推奨)", "その他 (下の回答欄に記入)"], 1),
+                "「指摘1: 3. 設計を変える」: 「その他 (下の回答欄に記入)」を選んだときの対応の文を書く欄が、項目にありません",
+            ),
+        ];
+        for (needed, body, want) in cases {
+            let (_root, project) = project();
+            let (mut state, path) = waiting_review(&project, &needed);
+            let (before, doc_before) = (state.clone(), read(&project, &path));
+            let reasons = rejected(super::super::resume_with(
+                &mut state,
+                &done(),
+                &project,
+                &body,
+            ));
+            assert_eq!(reasons.len(), 1, "理由 = {reasons:?}");
+            assert!(reasons[0].starts_with(want), "理由 = {}", reasons[0]);
+            assert_eq!(state, before, "受け付けなかった回答で状態を変えた");
+            assert_eq!(
+                read(&project, &path),
+                doc_before,
+                "受け付けなかった回答を書いた"
+            );
+        }
+    }
+
+    #[test]
+    fn 回答の欄の数が人間の回答を待つ指摘と違えば理由を返す() {
+        let (_root, project) = project();
+        let (mut state, _) = waiting_review(&project, NEEDS_HUMAN);
+        let body = format!(
+            "{}\n### 指摘2: 余分な欄\n\n- [x] A: 直す\n",
+            review_body(&["設計を変える (推奨)", "現状維持"], 0)
+        );
+        let reasons = rejected(super::super::resume_with(
+            &mut state,
+            &done(),
+            &project,
+            &body,
+        ));
+        assert_eq!(
+            reasons,
+            [
+                "回答の欄が2個ありますが、レビュードキュメント docs/private/reviews/korylus-tools-demo-1-1-001.md で人間の回答を待つ指摘は1個です"
+            ]
+        );
+    }
+
+    #[test]
+    fn レビューの上限の項目で延ばすか打ち切るかを選んで再開する() {
+        let body = |chosen: usize| {
+            let marks = if chosen == 0 { ["x", " "] } else { [" ", "x"] };
+            format!(
+                "## 回答\n\n### 進め方\n\n- [{}] A: 上限を延ばして再レビューする\n- [{}] B: 打ち切って次へ進む\n",
+                marks[0], marks[1]
+            )
+        };
+        let (_root, project) = project();
+        let mut state = at_review_limit(&project);
+        super::super::resume_with(&mut state, &done(), &project, &body(0))
+            .expect("上限を延ばして再開できなかった");
+        assert_eq!(state.wait, None, "人間を待ったまま");
+        assert_eq!(
+            trail_of(&state).review_limit,
+            Some(2),
+            "上限を1回延ばしていない"
+        );
+
+        let (_root, project) = super::super::tests::project();
+        let mut state = at_review_limit(&project);
+        super::super::resume_with(&mut state, &done(), &project, &body(1))
+            .expect("打ち切って再開できなかった");
+        assert_eq!(state.wait, None, "人間を待ったまま");
+        assert_eq!(
+            trail_of(&state).review_limit,
+            Some(1),
+            "打ち切ったのに上限を延ばした"
         );
     }
 }

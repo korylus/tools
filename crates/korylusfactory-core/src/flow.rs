@@ -9,6 +9,7 @@
 //! 呼び出し側は、状態ファイルのロックを取ってから状態を読み、状態遷移で変えた状態を同じロックの中で書く。
 //! エラーを返したときは、状態を書かない。
 
+mod answer;
 mod report;
 mod retry;
 mod review;
@@ -20,8 +21,10 @@ pub use korylus_workdoc::Error as PlanError;
 use korylus_workdoc::plan::{self, Violation};
 pub use korylus_workdoc::plan::{BaseBranch, Plan, Task};
 
+pub use answer::resume_with;
 pub use report::{Reported, complete, finish_report};
 pub use retry::{RETRY_LIMIT, Retry, ask, begin_session, retry};
+pub(crate) use review::human_findings;
 pub use review::{
     DEFAULT_REVIEW_LIMIT, Fixed, finish_fix, finish_report_fix, finish_review, resume, reviewer_for,
 };
@@ -550,22 +553,26 @@ fn verification_reasons(items: &[VerificationItem]) -> Vec<String> {
 /// 状態stateを、タスクtaskのステップstepに進める。タスクに属さないステップ (作業報告書) なら、taskは `None` にする。
 fn start(state: &mut PlanState, task: Option<&str>, step: Step) {
     state.session_started = false;
+    state.answers.clear();
     state.task = task.map(str::to_owned);
     state.step = Some(step);
     state.retries = 0;
     state.retry_reasons.clear();
     state.wait = None;
+    state.notified = None;
     state.review_before = None;
 }
 
 /// 状態stateから、進めているタスクとステップを外す。
 fn clear(state: &mut PlanState) {
     state.session_started = false;
+    state.answers.clear();
     state.task = None;
     state.step = None;
     state.retries = 0;
     state.retry_reasons.clear();
     state.wait = None;
+    state.notified = None;
     state.review_before = None;
 }
 
@@ -585,6 +592,7 @@ fn wait(
     state.retries = 0;
     state.retry_reasons.clear();
     state.review_before = None;
+    state.notified = None;
     state.wait = Some(Wait {
         kind,
         reason,

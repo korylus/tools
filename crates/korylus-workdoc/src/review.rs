@@ -145,6 +145,9 @@ pub struct Finding {
     pub options: Vec<Choice>,
     /// 「**対応方針**:」の行番号 (1始まり)。欠けていれば、欠落を見つけた区分・見出し・項目の行番号。
     pub line_no: usize,
+    /// 指摘の本文 (Markdown)。見出し (再検討提案とリストの項目の指摘は、項目) から「**対応方針**:」の前までを、
+    /// リストの項目の字下げと前後の空白を除いて返す。対応方針が欠けた指摘では空。
+    pub summary: String,
 }
 
 /// 対応方針の選択肢1つ。
@@ -188,6 +191,7 @@ pub fn parse(src: &str) -> Result<Document, Error> {
         tree: &tree,
         src: &src,
         findings: Vec::new(),
+        text_start: 0,
     };
 
     let mut errs = Vec::new();
@@ -204,6 +208,7 @@ pub fn parse(src: &str) -> Result<Document, Error> {
                 reader.flush(&section, &title, &g, group_start, group_line);
                 group_start = reader.findings.len();
                 group_line = tree.start_line(id);
+                reader.text_start = tree.end(id);
             }
             match level {
                 2 => {
@@ -253,6 +258,10 @@ pub fn parse(src: &str) -> Result<Document, Error> {
                         .children
                         .first()
                         .map_or_else(String::new, |&c| tree.line_text(c));
+                    // 項目の1行目は見出しとして読むため、本文は2行目から始める。
+                    if let Some(start) = tree.start_offset(item) {
+                        reader.text_start = reader.line_end(start);
+                    }
                     reader.collect(item, &section, &item_title, &mut ig, true);
                     if ig.pending > 0 {
                         reader.add_missing(
@@ -298,6 +307,8 @@ struct Reader<'a> {
     tree: &'a Tree<'a>,
     src: &'a str,
     findings: Vec<Finding>,
+    /// 次に読む指摘の本文が始まる、文書での位置 (バイト)。
+    text_start: usize,
 }
 
 impl Reader<'_> {
@@ -352,10 +363,9 @@ impl Reader<'_> {
                 continue;
             }
             g.pending = 0;
-            let options = self
-                .next_list(id)
-                .map(|list| self.options(list))
-                .unwrap_or_default();
+            let list = self.next_list(id);
+            let options = list.map(|list| self.options(list)).unwrap_or_default();
+            let summary = self.summary(line.start);
             self.findings.push(Finding {
                 section: section.to_owned(),
                 title: title.to_owned(),
@@ -363,7 +373,11 @@ impl Reader<'_> {
                 proposal,
                 options,
                 line_no: line.no,
+                summary,
             });
+            // 同じ見出しの中で続く指摘の本文は、この指摘の選択肢と回答の欄のあとから始める。
+            self.text_start =
+                list.map_or_else(|| self.line_end(line.start), |list| self.after_answer(list));
         }
     }
 
@@ -377,10 +391,19 @@ impl Reader<'_> {
         let mut found = false;
         for &item in &tree.node(list).children {
             let (start, before) = (self.findings.len(), g.pending);
+            let text_start = self.text_start;
+            // 項目の中の指摘の本文は、項目の1行目から始める。
+            if let Some(offset) = tree.start_offset(item) {
+                self.text_start = offset;
+            }
             self.collect(item, section, title, g, false);
             if self.findings.len() > start {
                 found = true;
-            } else if g.pending > 0 && g.pending != before {
+                continue;
+            }
+            // 指摘の無い項目 (チェックしたガイドラインの一覧など) は、見出しから続く本文の始まりを変えない。
+            self.text_start = text_start;
+            if g.pending > 0 && g.pending != before {
                 // 項目の中で区分を書いたのに対応方針が続かなかった。
                 self.add_missing(section, title, g.category.as_ref(), false, g.pending);
                 g.pending = 0;
@@ -413,7 +436,21 @@ impl Reader<'_> {
             proposal,
             options: Vec::new(),
             line_no,
+            summary: String::new(),
         });
+    }
+
+    /// 位置offsetを含む行の、次の行の先頭の位置を返す。
+    fn line_end(&self, offset: usize) -> usize {
+        self.src[offset..]
+            .find('\n')
+            .map_or(self.src.len(), |i| offset + i + 1)
+    }
+
+    /// 指摘の本文が始まる位置から、「**対応方針**:」の行の位置endの前までを、指摘の本文として返す。
+    fn summary(&self, end: usize) -> String {
+        let text = self.src.get(self.text_start..end).unwrap_or_default();
+        dedent(text).trim().to_owned()
     }
 
     /// リストの項目のうち、チェックボックスで始まるものを選択肢として返す。
@@ -457,6 +494,48 @@ impl Reader<'_> {
         }
         None
     }
+
+    /// 選択肢のリスト `list` のあとの回答の欄 (「**回答**:」の段落と、続くコードブロック) の終わりの位置を返す。
+    /// 回答の欄が無ければ、リストの終わりの位置を返す。
+    ///
+    /// テンプレートは選択肢のあとに回答の欄を置くため、続く指摘の本文に前の指摘の回答の欄を混ぜないよう飛ばす。
+    fn after_answer(&self, list: usize) -> usize {
+        let tree = self.tree;
+        let mut end = tree.end(list);
+        let mut answer = false;
+        for &sibling in tree.next_siblings(list) {
+            match tree.node(sibling).kind {
+                Kind::HtmlBlock => {}
+                Kind::Paragraph if !answer && tree.line_text(sibling).starts_with("**回答**:") => {
+                    answer = true;
+                    end = tree.end(sibling);
+                }
+                Kind::CodeBlock if answer => return tree.end(sibling),
+                _ => break,
+            }
+        }
+        end
+    }
+}
+
+/// textの2行目以降に共通する字下げを除く。
+///
+/// リストの項目の本文は、1行目が項目の印のあとから始まり、2行目以降が項目の字下げの分だけ下がっているためである。
+fn dedent(text: &str) -> String {
+    let mut lines = text.split('\n');
+    let mut out = lines.next().unwrap_or_default().to_owned();
+    let rest: Vec<&str> = lines.collect();
+    let indent = rest
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start_matches(' ').len())
+        .min()
+        .unwrap_or(0);
+    for line in rest {
+        out.push('\n');
+        out.push_str(line.get(indent..).unwrap_or_default());
+    }
+    out
 }
 
 /// 「**評価**:」の値を総合評価にする。
@@ -701,6 +780,60 @@ mod tests {
             before.matches('\n').count() + 2,
             "段落の2行目の対応方針の行番号が期待と異なる"
         );
+    }
+
+    #[test]
+    fn 指摘の本文を見出しか項目から対応方針の前まで読み取る() {
+        let d = parse_ok(TEST_DOC);
+        let summaries: Vec<&str> = d.findings.iter().map(|f| f.summary.as_str()).collect();
+        assert_eq!(
+            summaries,
+            [
+                "**根拠**: 呼び出し元で処理されている\n\n**区分**: 要人間判断",
+                "**ステータス**: 要修正\n\n**区分**: 自動対応可",
+                "**[go-coding.md#ログ]**: log.Printfを使っている",
+                "**区分**: 自動対応可",
+            ]
+        );
+    }
+
+    #[test]
+    fn 見出しの下の一覧や続く指摘を前の指摘の本文に混ぜない() {
+        // 回答の欄は、無い・テンプレートどおりのコードブロック・段落に直接書いた回答、のいずれでも本文に混ぜない。
+        for answer in [
+            "",
+            "**回答**:\n\n```\n(ここに回答を記入)\n```\n\n",
+            "**回答**: 選択肢のとおりに直す\n\n",
+        ] {
+            let src = doc_with(
+                SECTION_FINDINGS,
+                &format!(
+                    "### 1. 二つの問題\n\n\
+                     **チェックしたガイドライン**:\n\n\
+                     - [Rustのテスト](/rules/testing.md)\n\n\
+                     1つ目の問題の説明。\n  字下げした続き。\n\n\
+                     **区分**: 要人間判断\n\n\
+                     **対応方針**:\n\n\
+                     - [ ] 直す (推奨)\n\n\
+                     {answer}\
+                     2つ目の問題の説明。\n\n\
+                     **区分**: 要人間判断\n\n\
+                     **対応方針**:\n\n\
+                     - [ ] 直す (推奨)\n\n\
+                     {answer}"
+                ),
+            );
+            let d = parse_ok(&src);
+            let summaries: Vec<&str> = d.findings.iter().map(|f| f.summary.as_str()).collect();
+            assert_eq!(
+                summaries,
+                [
+                    "**チェックしたガイドライン**:\n\n- [Rustのテスト](/rules/testing.md)\n\n1つ目の問題の説明。\n  字下げした続き。\n\n**区分**: 要人間判断",
+                    "2つ目の問題の説明。\n\n**区分**: 要人間判断",
+                ],
+                "回答の欄 {answer:?} で、本文の範囲が違う"
+            );
+        }
     }
 
     #[test]

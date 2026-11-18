@@ -208,6 +208,22 @@ impl<'a> Tree<'a> {
         }
     }
 
+    /// ブロックの1行目の本文の先頭の、文書での位置 (バイト) を返す。
+    /// 本文を持たないブロック (リスト項目など) は、最初の子を辿って求める。辿れなければ `None` を返す。
+    pub(super) fn start_offset(&self, mut id: usize) -> Option<usize> {
+        loop {
+            if let Some(line) = self.lines(id).first() {
+                return Some(line.start);
+            }
+            id = *self.nodes[id].children.first()?;
+        }
+    }
+
+    /// ブロックの終わり (末尾の改行のあと) の、文書での位置 (バイト) を返す。
+    pub(super) fn end(&self, id: usize) -> usize {
+        self.nodes[id].span.end
+    }
+
     /// ブロック `id` のあとに続く兄弟のブロックを返す。
     pub(super) fn next_siblings(&self, id: usize) -> &[usize] {
         let Some(parent) = self.nodes[id].parent else {

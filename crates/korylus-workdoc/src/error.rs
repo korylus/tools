@@ -12,4 +12,12 @@ pub enum Error {
     /// レビュードキュメントの書式に誤りがある。誤りを、見つけた順にすべて持つ。
     #[error("{}", .0.join("\n"))]
     InvalidReview(Vec<String>),
+
+    /// 人間キューの項目の書式に誤りがある。誤りを、見つけた順にすべて持つ。
+    #[error("{}", .0.join("\n"))]
+    InvalidItem(Vec<String>),
+
+    /// 人間キューの項目の回答の形に誤りがある。誤りを、欄の順にすべて持つ。
+    #[error("{}", .0.join("\n"))]
+    InvalidAnswer(Vec<String>),
 }

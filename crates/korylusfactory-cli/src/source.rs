@@ -307,18 +307,22 @@ impl Wikino {
 }
 
 /// WikinoのページのURLから、スペースとページ番号の文字列を取り出す。
-///
-/// スペースは `-` で始まる値をwikinoコマンドにフラグとして読ませないよう、先頭にハイフンを許さない。
 fn split_page_url(arg: &str) -> Option<(&str, &str)> {
     let rest = arg.strip_prefix(WIKINO_HOST)?.strip_prefix("/s/")?;
     let (space, number) = rest.split_once("/pages/")?;
+    let valid_number = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
+    (is_space(space) && valid_number).then_some((space, number))
+}
+
+/// spaceが、wikinoコマンドに渡せるスペースの識別子の形かを返す。
+///
+/// `-` で始まる値をwikinoコマンドにフラグとして読ませないよう、先頭にハイフンを許さない。
+pub(crate) fn is_space(space: &str) -> bool {
     let mut chars = space.chars();
-    let valid_space = chars
+    chars
         .next()
         .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    let valid_number = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
-    (valid_space && valid_number).then_some((space, number))
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// wikinoの `--md` の出力 (frontmatter付きのMarkdown) を、本文とトピックの番号に分ける。

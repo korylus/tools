@@ -6,12 +6,18 @@
 //! {
 //!   "roadmap": "https://wikino.app/s/<スペース>/pages/<ページ番号>",
 //!   "sections": ["やってる", "優先度: 高", "優先度: 中"],
-//!   "done_sections": ["リリース待ち", "やった"]
+//!   "done_sections": ["リリース待ち", "やった"],
+//!   "project": "mewst",
+//!   "queue": {"space": "<スペース>", "topic": 12},
+//!   "notify": {"command": ["<通知のコマンド>", "<引数>"]}
 //! }
 //! ```
 //!
 //! `sections` は承認とみなすロードマップの節で、省略すると [`DEFAULT_SECTIONS`] を使う。
 //! `done_sections` は完了 (マージ済み) とみなす節で、省略すると [`DEFAULT_DONE_SECTIONS`] を使う。
+//! `project` はプロジェクト名で、`queue` か `notify` を書くときは必ず書く。
+//! `queue` は人間キューの置き場 (Wikinoのスペースとトピック) で、省略すると項目を積まない。
+//! `notify` は人間待ちを知らせるコマンドで、省略すると知らせない。
 
 use std::fs;
 use std::io;
@@ -23,6 +29,7 @@ pub use korylusfactory_core::queue::DEFAULT_SECTIONS;
 pub const DEFAULT_DONE_SECTIONS: [&str; 2] = ["リリース待ち", "やった"];
 use serde::Deserialize;
 
+use crate::human_queue::Location;
 use crate::source::{self, Kind, Wikino};
 
 /// プロジェクトのルートからの、設定ファイルの相対パス。
@@ -88,6 +95,39 @@ pub enum Error {
         /// 両方にある節。
         sections: Vec<String>,
     },
+
+    /// 人間キューか通知のコマンドを書いたのに、プロジェクト名が無い。
+    #[error(
+        "設定ファイル {} に「project」がありません。「queue」か「notify」を書くときは、プロジェクト名を「project」に書いてください",
+        .0.display()
+    )]
+    NoProject(PathBuf),
+
+    /// プロジェクト名に使えない文字がある。
+    #[error(
+        "設定ファイル {} の「project」 {name:?} を使えません。英数字・ハイフン・アンダースコアで書いてください",
+        .path.display()
+    )]
+    InvalidProject {
+        /// 設定ファイルのパス。
+        path: PathBuf,
+        /// 書かれたプロジェクト名。
+        name: String,
+    },
+
+    /// 人間キューの置き場のスペースかトピックが誤っている。
+    #[error(
+        "設定ファイル {} の「queue」を使えません。「space」にスペースの識別子を、「topic」に1以上のトピックの番号を書いてください",
+        .0.display()
+    )]
+    InvalidQueue(PathBuf),
+
+    /// 通知のコマンドが空。
+    #[error(
+        "設定ファイル {} の「notify」の「command」が空です。実行するコマンドと引数を並べてください",
+        .0.display()
+    )]
+    NoNotifyCommand(PathBuf),
 }
 
 /// 設定ファイルのJSONの形。
@@ -97,6 +137,24 @@ struct File {
     roadmap: String,
     sections: Option<Vec<String>>,
     done_sections: Option<Vec<String>>,
+    project: Option<String>,
+    queue: Option<QueueFile>,
+    notify: Option<NotifyFile>,
+}
+
+/// 設定ファイルの「queue」の形。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueueFile {
+    space: String,
+    topic: u64,
+}
+
+/// 設定ファイルの「notify」の形。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotifyFile {
+    command: Vec<String>,
 }
 
 /// korylusfactoryの設定。
@@ -108,6 +166,28 @@ pub struct Config {
     pub sections: Vec<String>,
     /// 完了 (マージ済み) とみなすロードマップの節の見出し。
     pub done_sections: Vec<String>,
+    /// プロジェクト名と、人間待ちの置き場・知らせ方。「project」を書かなければ `None`。
+    pub project: Option<Project>,
+}
+
+/// プロジェクト名と、そのプロジェクトの人間待ちの置き場・知らせ方。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    /// プロジェクト名。人間キューの項目のタイトルと「状況」に書き、通知のコマンドに渡す。
+    pub name: String,
+    /// 人間キューの置き場。`None` なら項目を積まず、`korylusfactory resume` だけで再開する。
+    pub queue: Option<Location>,
+    /// 人間待ちを知らせるコマンド。`None` なら知らせない。
+    pub notify: Option<Notify>,
+}
+
+/// 人間待ちを知らせるコマンド。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notify {
+    /// 実行するコマンド。
+    pub program: String,
+    /// コマンドの引数。
+    pub args: Vec<String>,
 }
 
 /// プロジェクトのルートrootの設定ファイルを読み取る。
@@ -150,11 +230,62 @@ pub fn load(root: &Path) -> Result<Config, Error> {
             sections: overlapping,
         });
     }
+    let project = read_project(path, file.project, file.queue, file.notify)?;
     Ok(Config {
         roadmap,
         sections,
         done_sections,
+        project,
     })
+}
+
+/// 設定ファイルpathの「project」「queue」「notify」を読み取る。
+fn read_project(
+    path: PathBuf,
+    name: Option<String>,
+    queue: Option<QueueFile>,
+    notify: Option<NotifyFile>,
+) -> Result<Option<Project>, Error> {
+    let Some(name) = name else {
+        if queue.is_some() || notify.is_some() {
+            return Err(Error::NoProject(path));
+        }
+        return Ok(None);
+    };
+    // プロジェクト名は項目のタイトルの先頭に「<プロジェクト名> - 」と書き、このプロジェクトの項目を見分けるのに使う。
+    // 区切りやタイトルに使えない文字を含めないよう、使える文字を絞る。
+    let valid_name = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !valid_name {
+        return Err(Error::InvalidProject { path, name });
+    }
+    let queue = match queue {
+        Some(QueueFile { space, topic }) if source::is_space(&space) && topic > 0 => {
+            Some(Location { space, topic })
+        }
+        Some(_) => return Err(Error::InvalidQueue(path)),
+        None => None,
+    };
+    let notify = match notify.map(|notify| notify.command) {
+        Some(command) => {
+            let mut command = command.into_iter();
+            match command.next() {
+                Some(program) if !program.is_empty() => Some(Notify {
+                    program,
+                    args: command.collect(),
+                }),
+                _ => return Err(Error::NoNotifyCommand(path)),
+            }
+        }
+        None => None,
+    };
+    Ok(Some(Project {
+        name,
+        queue,
+        notify,
+    }))
 }
 
 #[cfg(test)]
@@ -191,8 +322,121 @@ mod tests {
                     "優先度: 中".to_owned(),
                 ],
                 done_sections: vec!["リリース待ち".to_owned(), "やった".to_owned()],
+                project: None,
             }
         );
+    }
+
+    #[test]
+    fn プロジェクト名と人間キューの置き場と通知のコマンドを読む() {
+        let root = project(
+            r#"{
+              "roadmap": "https://wikino.app/s/shimbaco/pages/1214",
+              "project": "mewst",
+              "queue": {"space": "shimbaco", "topic": 12},
+              "notify": {"command": ["ntfy", "publish", "factory"]}
+            }"#,
+        );
+        let config = load(root.path()).expect("設定を読めなかった");
+        assert_eq!(
+            config.project,
+            Some(Project {
+                name: "mewst".to_owned(),
+                queue: Some(Location {
+                    space: "shimbaco".to_owned(),
+                    topic: 12,
+                }),
+                notify: Some(Notify {
+                    program: "ntfy".to_owned(),
+                    args: vec!["publish".to_owned(), "factory".to_owned()],
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn 人間キューと通知のコマンドは片方だけでも使える() {
+        let root = project(
+            r#"{"roadmap": "https://wikino.app/s/shimbaco/pages/1", "project": "mewst", "notify": {"command": ["notify-send"]}}"#,
+        );
+        let got = load(root.path())
+            .expect("設定を読めなかった")
+            .project
+            .expect("プロジェクトが無い");
+        assert_eq!(got.queue, None);
+        assert_eq!(
+            got.notify,
+            Some(Notify {
+                program: "notify-send".to_owned(),
+                args: Vec::new(),
+            })
+        );
+
+        let root = project(
+            r#"{"roadmap": "https://wikino.app/s/shimbaco/pages/1", "project": "mewst", "queue": {"space": "shimbaco", "topic": 12}}"#,
+        );
+        let got = load(root.path())
+            .expect("設定を読めなかった")
+            .project
+            .expect("プロジェクトが無い");
+        assert!(got.queue.is_some(), "置き場を読まなかった");
+        assert_eq!(got.notify, None);
+    }
+
+    #[test]
+    fn 人間待ちの設定の誤りはエラー() {
+        let cases = [
+            (
+                "queueだけでprojectが無い",
+                r#""queue": {"space": "shimbaco", "topic": 12}"#,
+                "に「project」がありません",
+            ),
+            (
+                "notifyだけでprojectが無い",
+                r#""notify": {"command": ["notify-send"]}"#,
+                "に「project」がありません",
+            ),
+            (
+                "プロジェクト名が空",
+                r#""project": """#,
+                "の「project」 \"\" を使えません",
+            ),
+            (
+                "プロジェクト名に区切りの文字がある",
+                r#""project": "mewst - web""#,
+                "の「project」 \"mewst - web\" を使えません",
+            ),
+            (
+                "スペースがハイフンで始まる",
+                r#""project": "mewst", "queue": {"space": "-x", "topic": 12}"#,
+                "の「queue」を使えません",
+            ),
+            (
+                "トピックが0",
+                r#""project": "mewst", "queue": {"space": "shimbaco", "topic": 0}"#,
+                "の「queue」を使えません",
+            ),
+            (
+                "通知のコマンドが空",
+                r#""project": "mewst", "notify": {"command": []}"#,
+                "の「notify」の「command」が空です",
+            ),
+            (
+                "通知のコマンドの名前が空",
+                r#""project": "mewst", "notify": {"command": ["", "x"]}"#,
+                "の「notify」の「command」が空です",
+            ),
+        ];
+        for (name, fields, want) in cases {
+            let root = project(&format!(
+                r#"{{"roadmap": "https://wikino.app/s/shimbaco/pages/1", {fields}}}"#
+            ));
+            let err = load(root.path()).expect_err(&format!("{name}: エラーにならなかった"));
+            assert!(
+                err.to_string().contains(want),
+                "{name}: エラー = {err}、期待値 = {want:?} を含むエラー"
+            );
+        }
     }
 
     #[test]
@@ -259,6 +503,18 @@ mod tests {
             (
                 "知らない項目がある",
                 r#"{"roadmap": "https://wikino.app/s/shimbaco/pages/1", "section": []}"#,
+            ),
+            (
+                "queueに知らない項目がある",
+                r#"{"roadmap": "https://wikino.app/s/shimbaco/pages/1", "project": "mewst", "queue": {"space": "shimbaco", "topic": 12, "title": "x"}}"#,
+            ),
+            (
+                "queueのtopicが数ではない",
+                r#"{"roadmap": "https://wikino.app/s/shimbaco/pages/1", "project": "mewst", "queue": {"space": "shimbaco", "topic": "12"}}"#,
+            ),
+            (
+                "notifyのcommandが文字列",
+                r#"{"roadmap": "https://wikino.app/s/shimbaco/pages/1", "project": "mewst", "notify": {"command": "notify-send"}}"#,
             ),
         ];
         for (name, content) in cases {
