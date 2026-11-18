@@ -255,6 +255,10 @@ Use the built binary instead of running it from the working tree with `go run`, 
 `korylusfactory`, the CLI for advancing work plans without a person attending to them, has moved to [korylus/factory](https://github.com/korylus/factory).
 See the korylus/factory README for usage, installation, and development instructions.
 
+A binary built from `korylus/tools` warns you to run `make install-korylusfactory` in this repository once the Rust workspace is removed from `main`.
+After you update this checkout, that command fails because the target has been removed.
+Once the migration reaches `main` in `korylus/factory`, follow the [installation instructions in the new repository](https://github.com/korylus/factory/blob/main/README.en.md#installing) to reinstall.
+
 ## Installing and running
 
 Building koryluslint requires Go, a C compiler (GCC or Clang), and `CGO_ENABLED=1`.

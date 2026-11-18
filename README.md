@@ -253,6 +253,10 @@ Markdownの作業報告書 (`report-<版>.md`) を作っていたときの状態
 作業計画書を人が付き添わずに進めるCLIの `korylusfactory` は、[korylus/factory](https://github.com/korylus/factory) へ移りました。
 使い方・インストール・開発の手順は、korylus/factoryのREADMEを参照してください。
 
+`korylus/tools` からビルドした版は、Rustのワークスペースが `main` から削除されると、このリポジトリで `make install-korylusfactory` を実行するよう警告します。
+このリポジトリのチェックアウトを更新すると、そのコマンドはターゲットが削除されたため失敗します。
+移行が `korylus/factory` の `main` に入ったら、[移転先のインストール手順](https://github.com/korylus/factory/blob/main/README.md#インストール)に従って入れ直してください。
+
 ## 取得・実行
 
 koryluslintのビルドには、Goに加えてCコンパイラ (GCCまたはClang) と`CGO_ENABLED=1`が必要です。
