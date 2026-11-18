@@ -10,6 +10,7 @@
 //! 状態を変えるときは、[`PlanDir::lock`] で取ったロックの中で、読み取りから書き込みまでを行う。
 //! 書き込みは一時ファイルに書いてから置き換えるため、ロックを取らずに読んでも書きかけの状態は見えない。
 
+mod item;
 mod record;
 
 use std::fs::{self, File, OpenOptions};
@@ -19,9 +20,13 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+pub use item::{
+    ItemLocation, ItemPage, NOTICES_PATH, Notice, NoticeKind, Notices, Notified, QueuedItem,
+    WaitItem,
+};
 pub use record::{
-    DeferredFinding, ReviewRecord, ReviewTrail, Reviewer, TaskRecord, Verdict, VerificationItem,
-    VerificationKind,
+    DeferredFinding, HumanFinding, HumanReview, ReviewRecord, ReviewTrail, Reviewer, TaskRecord,
+    Verdict, VerificationItem, VerificationKind,
 };
 
 /// プロジェクトのルートからの、状態を置くディレクトリの相対パス。
@@ -153,6 +158,11 @@ pub struct PlanState {
     /// 人間を待っている理由。待っていなければ `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Wait>,
+    /// 進めているステップのセッションからの質問に、人間が人間キューの項目で答えた回答。答えた順に並べる。
+    ///
+    /// 同じステップで何度質問しても前の回答が要るため、やり直すセッションの指示にすべて添え、ステップを進めたら外す。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<HumanAnswer>,
     /// 作業計画書の完了 (マージ済み) を記録した時刻。完了していなければ `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
@@ -172,6 +182,14 @@ pub struct PlanState {
     /// 書いた作業報告書の記録。回の順に並べる。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub report_rounds: Vec<ReportRound>,
+    /// 人間待ちに積んで、まだ片付けていない人間キューの項目。積んだ順に並べる。
+    ///
+    /// 待ちが解けたあとも、項目の下書きを片付けるまで残す。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<WaitItem>,
+    /// 通知のコマンドで最後に知らせた人間待ち。同じ待ちを、通知のコマンドで繰り返し知らせないために使う。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notified: Option<Notified>,
 }
 
 /// 作業報告書1回分の記録。
@@ -205,11 +223,14 @@ impl PlanState {
             retry_reasons: Vec::new(),
             session_started: false,
             wait: None,
+            answers: Vec::new(),
             completed_at: None,
             snapshot: None,
             review_before: None,
             tasks: Vec::new(),
             report_rounds: Vec::new(),
+            items: Vec::new(),
+            notified: None,
         }
     }
 
@@ -263,6 +284,12 @@ impl PlanState {
         heads
     }
 
+    /// 今の人間待ちに積んだ項目の記録を返す。待っていないか、まだ積んでいなければ `None` を返す。
+    pub fn waiting_item(&self) -> Option<&WaitItem> {
+        let wait = self.wait.as_ref()?;
+        self.items.iter().find(|item| &item.wait == wait)
+    }
+
     /// 最新の回の作業報告書のURLを返す。まだ書いていなければ `None` を返す。
     pub fn latest_report(&self) -> Option<&str> {
         self.report_rounds
@@ -313,6 +340,15 @@ pub struct Wait {
     /// 理由の詳細 (人間にしてほしいこと・未コミットのファイルなど)。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub details: Vec<String>,
+}
+
+/// セッションからの質問と、人間の回答。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanAnswer {
+    /// セッションの質問。
+    pub question: String,
+    /// 人間の回答。
+    pub answer: String,
 }
 
 /// 人間を待つ場面。
@@ -394,6 +430,17 @@ impl Store {
     ///
     /// 状態の置き場の中の、計画書名に使えない名前のディレクトリと、状態ファイルの無いディレクトリは数えない。
     pub fn active(&self) -> Result<Vec<(String, PlanState)>, Error> {
+        Ok(self
+            .plans()?
+            .into_iter()
+            .filter(|(_, state)| !state.is_completed())
+            .collect())
+    }
+
+    /// 状態ファイルのある作業計画書の計画書名と状態を、完了を記録したものも含めて、計画書名の順に返す。
+    ///
+    /// 状態の置き場の中の、計画書名に使えない名前のディレクトリと、状態ファイルの無いディレクトリは数えない。
+    pub fn plans(&self) -> Result<Vec<(String, PlanState)>, Error> {
         let list_error = |source| Error::List {
             path: self.root.clone(),
             source,
@@ -413,18 +460,16 @@ impl Store {
             }
         }
         names.sort();
-        let mut active = Vec::new();
+        let mut plans = Vec::new();
         for name in names {
             let Ok(dir) = self.plan(&name) else {
                 continue;
             };
-            if let Some(state) = dir.load()?
-                && !state.is_completed()
-            {
-                active.push((name, state));
+            if let Some(state) = dir.load()? {
+                plans.push((name, state));
             }
         }
-        Ok(active)
+        Ok(plans)
     }
 }
 
@@ -547,7 +592,7 @@ struct Versioned<'a> {
 }
 
 /// pathにdataを書き、置き換えたあとに中身が失われないよう、ディスクに書き出すまで待つ。
-fn write_synced(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn write_synced(path: &Path, data: &[u8]) -> io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(data)?;
     file.sync_all()
@@ -589,6 +634,10 @@ mod tests {
                 reason: "レビューに要人間判断の指摘があります".to_owned(),
                 details: vec!["docs/private/reviews/demo-1-2-001.md".to_owned()],
             }),
+            answers: vec![HumanAnswer {
+                question: "名前をどちらにしますか".to_owned(),
+                answer: "短いほうにしてください".to_owned(),
+            }],
             completed_at: Some(
                 "2026-11-16T05:15:40.996853Z"
                     .parse()
@@ -619,6 +668,7 @@ mod tests {
                             .expect("日時を読み取れなかった"),
                     }],
                     review_limit: Some(4),
+                    human_review: None,
                     deferred: vec![DeferredFinding {
                         doc: PathBuf::from("docs/private/reviews/demo-1-2-001.md"),
                         title: "エラーの文面を揃える".to_owned(),
@@ -642,7 +692,49 @@ mod tests {
                 walkthrough_skipped: Some("ガイドラインの文面だけを直したため".to_owned()),
                 review: ReviewTrail::default(),
             }],
+            items: vec![WaitItem {
+                wait: Wait {
+                    kind: WaitKind::Review,
+                    reason: "レビューに要人間判断の指摘があります".to_owned(),
+                    details: vec!["docs/private/reviews/demo-1-2-001.md".to_owned()],
+                },
+                item: QueuedItem {
+                    location: None,
+                    title: "mewst - demo - レビューの要人間判断の指摘 - 2026-11-16 14時00分00秒"
+                        .to_owned(),
+                    at: "2026-11-16T14:00:00".parse().expect("日時を読み取れなかった"),
+                    page: Some(ItemPage {
+                        number: 30,
+                        url: "https://wikino.app/s/shimbaco/pages/30/edit".to_owned(),
+                    }),
+                },
+            }],
+            notified: Some(Notified {
+                wait: Wait {
+                    kind: WaitKind::Review,
+                    reason: "レビューに要人間判断の指摘があります".to_owned(),
+                    details: vec!["docs/private/reviews/demo-1-2-001.md".to_owned()],
+                },
+                url: Some("https://wikino.app/s/shimbaco/pages/30/edit".to_owned()),
+            }),
         }
+    }
+
+    #[test]
+    fn 今の待ちに積んだ項目だけを今の項目として返す() {
+        let mut state = sample();
+        assert_eq!(
+            state.waiting_item().map(|item| item.item.title.as_str()),
+            Some("mewst - demo - レビューの要人間判断の指摘 - 2026-11-16 14時00分00秒")
+        );
+        state.wait = Some(Wait {
+            kind: WaitKind::Question,
+            reason: "質問".to_owned(),
+            details: Vec::new(),
+        });
+        assert_eq!(state.waiting_item(), None, "前の待ちの項目を返した");
+        state.wait = None;
+        assert_eq!(state.waiting_item(), None, "待っていないのに項目を返した");
     }
 
     /// 計画書名nameの状態ファイルに、内容contentを直接書く。

@@ -64,7 +64,7 @@ pub enum Error {
         source: io::Error,
     },
 
-    /// セッションが終わったかを確かめられない。
+    /// 起動したコマンドやセッションが終わったかを、出力の読み取りを含めて確かめられない。
     #[error("{program}コマンドが終わったかを確かめられません")]
     Wait {
         /// 起動したコマンド。
@@ -92,11 +92,13 @@ impl Runner for System {
     fn run(&self, program: &str, args: &[OsString]) -> Result<Output, Error> {
         // 引数はシェルを通さずに渡すため、値に空白や記号を含んでいても1つの引数のまま届く。
         // 人の入力を待たずに進めるため、gitに認証情報を端末で尋ねさせず、失敗として返させる。
-        let output = Command::new(program)
+        let child = Command::new(program)
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|source| match source.kind() {
                 io::ErrorKind::NotFound => Error::NotFound(program.to_owned()),
                 _ => Error::Spawn {
@@ -104,6 +106,11 @@ impl Runner for System {
                     source,
                 },
             })?;
+        // 起動したあとの失敗は、コマンドが動いて要求を送った場合があるため、起動できなかった失敗と分けて返す。
+        let output = child.wait_with_output().map_err(|source| Error::Wait {
+            program: program.to_owned(),
+            source,
+        })?;
         let code = output
             .status
             .code()

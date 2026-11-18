@@ -52,9 +52,68 @@ pub struct ReviewTrail {
     /// 人間が延長したレビューの上限。延長していなければ `None` で、既定の上限を使う。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_limit: Option<u32>,
+    /// 人間の回答を待ち始めたときの指摘。回答を書いたあと状態を保存できなくても、同じ対象に再適用するために残す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_review: Option<HumanReview>,
     /// 変更しない選択肢 (後続タスクに積む・現状維持など) で回答した指摘。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deferred: Vec<DeferredFinding>,
+}
+
+/// 人間キューの回答を適用する、レビュー待ちを始めたときの対象。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanReview {
+    /// レビュードキュメントの、プロジェクトのルートからの相対パス。
+    pub doc: PathBuf,
+    /// 項目の回答欄に並べる順の指摘。チェックの有無は保存しない。
+    pub findings: Vec<HumanFinding>,
+}
+
+/// チェックの有無に左右されず、回答対象が変わっていないことを照合する指摘の記録。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanFinding {
+    /// 指摘がある節の名前。
+    pub section: String,
+    /// 指摘の見出し。
+    pub title: String,
+    /// 「対応方針」の行番号。同じ見出しの指摘を取り違えないために使う。
+    pub line_no: usize,
+    /// 判断の根拠になる本文。
+    pub summary: String,
+    /// 書かれた順の選択肢の本文。
+    pub options: Vec<String>,
+}
+
+impl From<&korylus_workdoc::review::Finding> for HumanFinding {
+    fn from(finding: &korylus_workdoc::review::Finding) -> Self {
+        Self {
+            section: finding.section.clone(),
+            title: finding.title.clone(),
+            line_no: finding.line_no,
+            summary: finding.summary.clone(),
+            options: finding
+                .options
+                .iter()
+                .map(|option| option.text.clone())
+                .collect(),
+        }
+    }
+}
+
+impl HumanFinding {
+    /// 今の指摘findingが、回答待ちを始めたときと同じ内容・場所かを返す。チェックの有無だけは比較しない。
+    pub(crate) fn matches(&self, finding: &korylus_workdoc::review::Finding) -> bool {
+        self.section == finding.section
+            && self.title == finding.title
+            && self.line_no == finding.line_no
+            && self.summary == finding.summary
+            && self.options.len() == finding.options.len()
+            && self
+                .options
+                .iter()
+                .zip(&finding.options)
+                .all(|(text, option)| text == &option.text)
+    }
 }
 
 /// レビュー1回の記録。

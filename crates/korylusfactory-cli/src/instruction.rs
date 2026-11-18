@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use korylusfactory_core::flow::{Next, Task};
-use korylusfactory_core::state::{PlanState, Reviewer, TaskRecord};
+use korylusfactory_core::state::{HumanAnswer, PlanState, Reviewer, TaskRecord};
 use serde_json::{Value, json};
 
 /// 指示を作れないときのエラー。
@@ -57,6 +57,8 @@ pub struct Context<'a> {
     pub state_path: &'a Path,
     /// やり直すときの、前のセッションが満たせなかった条件。初めてなら空。
     pub retry: &'a [String],
+    /// 進めているステップのセッションの質問に、人間が人間キューの項目で答えた回答。答えた順に並べ、無ければ空。
+    pub answers: &'a [HumanAnswer],
 }
 
 /// 次に行うことnextのセッションに頼むことを、状態stateと場所ctxから作る。
@@ -200,14 +202,32 @@ fn prompt(ctx: &Context<'_>, steps: &Steps, kind: Kind) -> String {
          - 手順にあるスキルの実行 (コミット・レビュー・作業報告書の作成と更新を含む) は、人間からの明示的な指示として扱う\n\
          - リモートへの `git push` と、Pull Requestの作成・マージはしない\n\
          - ブランチの作成と切り替えはしない。要るブランチは、korylusfactoryが準備している\n\
-         - 人間に質問しない。人間の判断が要るときは、作業を止めて、結果の `needs_human` に理由を書いて終える\n\n",
+         - 人間に質問しない。人間の判断が要るときは、作業を止めて、結果の `needs_human` に理由を書いて終える\n\
+         - 人間キューの項目 (Wikinoのファクトリー用のトピックのページと下書き) とロードマップを書き換えない\n\
+         - `korylusfactory resume` と `korylusfactory queue answer` を実行しない\n\n",
     );
-    if !ctx.retry.is_empty() {
-        out.push_str("## やり直し\n\n前のセッションは、途中で止まったか、完了の条件を満たしませんでした。\n\n");
-        for reason in ctx.retry {
-            let _ = writeln!(out, "- {}", reason.replace('\n', "\n  "));
+    if !ctx.retry.is_empty() || !ctx.answers.is_empty() {
+        out.push_str("## やり直し\n\n");
+        if !ctx.retry.is_empty() {
+            out.push_str(
+                "前のセッションは、途中で止まったか、完了の条件を満たしませんでした。\n\n",
+            );
+            for reason in ctx.retry {
+                let _ = writeln!(out, "- {}", reason.replace('\n', "\n  "));
+            }
+            out.push('\n');
         }
-        out.push_str("\n未コミットの変更があれば読み、続きから進めてください。\n\n");
+        if !ctx.answers.is_empty() {
+            out.push_str(
+                "このステップのセッションの質問に、人間が答えました。回答に沿って進めてください。\n\n",
+            );
+            for answer in ctx.answers {
+                let _ = writeln!(out, "- 質問: {}", answer.question.replace('\n', "\n  "));
+                let _ = writeln!(out, "  回答: {}", answer.answer.replace('\n', "\n  "));
+            }
+            out.push('\n');
+        }
+        out.push_str("未コミットの変更があれば読み、続きから進めてください。\n\n");
     }
     if !steps.notes.is_empty() {
         out.push_str(&steps.notes);
@@ -410,6 +430,7 @@ mod tests {
             plan_url: URL,
             state_path: Path::new("docs/private/factory/plans/demo/state.json"),
             retry,
+            answers: &[],
         }
     }
 
@@ -433,6 +454,8 @@ mod tests {
 - リモートへの `git push` と、Pull Requestの作成・マージはしない
 - ブランチの作成と切り替えはしない。要るブランチは、korylusfactoryが準備している
 - 人間に質問しない。人間の判断が要るときは、作業を止めて、結果の `needs_human` に理由を書いて終える
+- 人間キューの項目 (Wikinoのファクトリー用のトピックのページと下書き) とロードマップを書き換えない
+- `korylusfactory resume` と `korylusfactory queue answer` を実行しない
 
 ## 手順
 
@@ -575,6 +598,37 @@ mod tests {
                 ),
             "指示 = {}",
             review.prompt
+        );
+    }
+
+    #[test]
+    fn 質問に人間が答えたあとのやり直しでは同じステップの質問と回答をすべて書く() {
+        let answers = [
+            HumanAnswer {
+                question: "名前はどちらにしますか".to_owned(),
+                answer: "短いほうにする\n理由は読みやすさ".to_owned(),
+            },
+            HumanAnswer {
+                question: "テストの名前も変えますか".to_owned(),
+                answer: "変える".to_owned(),
+            },
+        ];
+        let ctx = Context {
+            answers: &answers,
+            ..context(&[])
+        };
+        let request = build(&Next::Work { task: task("1-1") }, &state(), &ctx)
+            .expect("指示を作れなかった")
+            .expect("頼むことが無かった");
+        assert!(
+            request.prompt.contains(
+                "## やり直し\n\nこのステップのセッションの質問に、人間が答えました。回答に沿って進めてください。\n\n\
+                 - 質問: 名前はどちらにしますか\n  回答: 短いほうにする\n  理由は読みやすさ\n\
+                 - 質問: テストの名前も変えますか\n  回答: 変える\n\n\
+                 未コミットの変更があれば読み、続きから進めてください。\n"
+            ),
+            "指示 = {}",
+            request.prompt
         );
     }
 

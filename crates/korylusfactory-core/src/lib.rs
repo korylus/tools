@@ -4,5 +4,6 @@
 //! 外部プロセスの起動はコマンドのクレート (`korylusfactory-cli`) に任せ、ここでは起動しない。
 
 pub mod flow;
+pub mod item;
 pub mod queue;
 pub mod state;

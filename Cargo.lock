@@ -296,6 +296,7 @@ dependencies = [
 name = "korylus-workdoc"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "pulldown-cmark",
  "regex",
  "scraper",

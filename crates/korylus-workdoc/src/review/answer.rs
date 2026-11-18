@@ -100,6 +100,22 @@ impl Document {
         a
     }
 
+    /// 指摘ごとに選んだ選択肢choicesにだけチェックを入れた、レビュードキュメントの内容を返す。
+    ///
+    /// choicesは、このドキュメントの指摘 (`findings` か、[`Document::answer`] の `pending` の要素) と、選んだ選択肢の位置の組。
+    /// 選んだ指摘のほかの選択肢のチェックは外す。
+    pub fn choose(&self, choices: &[(&Finding, usize)]) -> String {
+        let mut out = self.src.clone();
+        for (finding, chosen) in choices {
+            for (i, option) in finding.options.iter().enumerate() {
+                // 括弧の中は1文字のため、`x` か半角スペースに置き換えても位置はずれない。
+                let mark = if i == *chosen { "x" } else { " " };
+                out.replace_range(option.mark..=option.mark, mark);
+            }
+        }
+        out
+    }
+
     /// 選択肢にチェックが入っている指摘を返す。
     /// レビュアーが書いた直後のドキュメントでは、チェックはレビュアーが入れたものになる。
     pub fn checked(&self) -> Vec<&Finding> {
@@ -136,6 +152,28 @@ mod tests {
     fn replace(src: &str, from: &str, to: &str) -> String {
         assert!(src.contains(from), "置き換える文字列 {from:?} が無い");
         src.replacen(from, to, 1)
+    }
+
+    #[test]
+    fn 選んだ選択肢にだけチェックを入れ_同じ指摘のほかのチェックを外す() {
+        let src = doc_with(
+            SECTION_FINDINGS,
+            "### 1. 設計を変える\n\n**区分**: 要人間判断\n\n**対応方針**:\n\n- [x] 変える (推奨)\n- [ ] 現状維持\n\n\
+             ### 2. 名前を揃える\n\n**区分**: 要人間判断\n\n**対応方針**:\n\n- [ ] 揃える (推奨)\n- [ ] 現状維持\n",
+        );
+        let d = parse_ok(&src);
+        let out = d.choose(&[(&d.findings[0], 1), (&d.findings[1], 0)]);
+        assert_eq!(
+            out,
+            replace(
+                &replace(&src, "- [x] 変える", "- [ ] 変える"),
+                "- [ ] 現状維持\n\n### 2.",
+                "- [x] 現状維持\n\n### 2.",
+            )
+            .replace("- [ ] 揃える", "- [x] 揃える")
+        );
+        let answered = parse_ok(&out).answer();
+        assert!(answered.pending.is_empty(), "選んだ指摘が人間待ちのまま");
     }
 
     #[test]

@@ -177,6 +177,7 @@ mod tests {
             roadmap: Wikino::page(Kind::Roadmap, "shimbaco", 1214),
             sections: vec!["やってる".to_owned()],
             done_sections: vec!["リリース待ち".to_owned(), "やった".to_owned()],
+            project: None,
         }
     }
 

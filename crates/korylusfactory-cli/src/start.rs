@@ -3,6 +3,7 @@
 //! ロードマップで承認された作業計画書を1本ずつ選び、状態遷移に次に行うことを尋ね、
 //! ブランチの準備かセッションの起動を行い、結果とリポジトリの状態を確かめて記録する、を止めるまで繰り返す。
 //! 人間を待つ間と、ロードマップに作業計画書が現れるのを待つ間は、間隔を空けて読み直す。
+//! 人間キューを使う設定なら、人間待ちを人間キューの項目として積み、項目が公開される前に待ちが解けたら片付ける ([`items`])。
 //!
 //! 状態ファイルの読み取りから次のステップの判定・書き込みまでは、1つのファイルロックの中で行う。
 //! セッションの実行中は、ロックを持たない。
@@ -11,6 +12,8 @@
 //! 実行中のセッションは、セッションの監督プロセスが呼び出し元の終わりを取り消しとして扱い、子孫まで終わらせる。
 //! 状態はセッションの結果を記録する前のまま残るため、次に起動したときに同じステップをやり直す。
 
+mod alert;
+mod items;
 mod prepare;
 mod session;
 #[cfg(test)]
@@ -25,18 +28,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use korylusfactory_core::flow::{self, Next, PlanDocument, Prepared, Project, Task};
+use korylusfactory_core::item::{self, Scene};
 use korylusfactory_core::queue::{self, Head};
-use korylusfactory_core::state::{self, PlanState, Store, Wait, WaitKind};
+use korylusfactory_core::state::{
+    self, ItemPage, NoticeKind, Notices, PlanState, Store, Wait, WaitKind,
+};
 
 use crate::completion::{self, Completion};
 use crate::config::{self, Config};
+use crate::human_queue::Open;
+use crate::notify::{self, Notifier};
 use crate::process::{Launcher, Runner};
 use crate::roadmap::{self, Entry, State};
 use crate::source::{self, Kind, Wikino};
 use crate::version::{self, Build, Freshness};
 use crate::{agent, branch, describe, instruction, status};
+use alert::TITLE_PREFIX;
 use session::Launch;
 
 /// 二重起動を防ぐロックに使うファイルの、プロジェクトのルートからの相対パス。
@@ -147,6 +157,10 @@ pub struct Timing {
     pub roadmap: Duration,
     /// 人間を待つ間に、`korylusfactory resume` で再開されたかを状態ファイルで確かめる間隔。
     pub state: Duration,
+    /// 人間を待つ間に人間キューの項目を読む間隔と、人間キューを読み書きできなかったときに、やり直すまで空ける間隔。
+    pub queue: Duration,
+    /// 通知のコマンドを終わらせるまでの時間の上限。
+    pub notify: Duration,
 }
 
 impl Default for Timing {
@@ -156,6 +170,8 @@ impl Default for Timing {
             retry: Duration::from_mins(5),
             roadmap: Duration::from_mins(5),
             state: Duration::from_secs(5),
+            queue: Duration::from_mins(1),
+            notify: notify::DEFAULT_TIMEOUT,
         }
     }
 }
@@ -192,6 +208,14 @@ pub struct Start<'a> {
     pub launcher: &'a dyn Launcher,
     /// 現在の日時を返し、待つ。
     pub clock: &'a dyn Clock,
+    /// 人間キューの置き場を開く。
+    pub queues: &'a dyn Open,
+    /// 人間待ちを知らせる通知のコマンドを実行する。
+    pub notifier: &'a dyn Notifier,
+    /// 標準エラーが端末か。端末なら、タイトルに今の状態を出し、人間待ちになったときにベルを鳴らす。
+    pub terminal: bool,
+    /// 人間キューの項目のタイトルと本文に書く日時の、タイムゾーン。
+    pub time_zone: &'a TimeZone,
     /// 実行しているkorylusfactoryのビルド元の情報。古いかどうかを確かめる。
     pub build: &'a Build,
     /// プロジェクトのルート。
@@ -206,6 +230,7 @@ impl fmt::Debug for Start<'_> {
             .field("build", self.build)
             .field("root", &self.root)
             .field("timing", &self.timing)
+            .field("time_zone", self.time_zone)
             .finish_non_exhaustive()
     }
 }
@@ -239,10 +264,15 @@ pub fn run(
         config,
         project,
         store: Store::new(start.root),
+        notices: Notices::new(start.root),
         out,
         err,
         shown: HashSet::new(),
         roadmap_read: None,
+        queue_after: None,
+        answer_read: None,
+        title: None,
+        rung: HashSet::new(),
     };
     let freshness = version::check(start.runner, start.build);
     director.say(&start.build.summary())?;
@@ -315,18 +345,49 @@ struct Director<'a, 's> {
     config: Config,
     project: Project,
     store: Store,
+    /// 状態ファイルに持たない待ちに積んだ、知らせの項目の記録。
+    notices: Notices,
     out: &'a mut dyn Write,
     err: &'a mut dyn Write,
     /// 前に進んでから表示した、待っている理由とエラー。進むまで、同じものを繰り返し表示しない。
     shown: HashSet<String>,
     /// 作業報告書の確認を待つ間に、最後にロードマップを読んだ日時。
     roadmap_read: Option<Timestamp>,
+    /// 人間キューを読み書きできなかったあと、次に読み書きしてよい日時。
+    queue_after: Option<Timestamp>,
+    /// 人間を待つ間に、最後に人間キューの項目を読んだ日時。
+    answer_read: Option<Timestamp>,
+    /// 端末に最後に出したタイトル。
+    title: Option<String>,
+    /// 作業へ戻るか、進める作業計画書が無くなってから、ベルを鳴らした人間待ち。
+    ///
+    /// 作業報告書の確認と取り込まれていないことの知らせのように、人間待ちが重なっても、それぞれで1回だけ鳴らすために集合で持つ。
+    rung: HashSet<String>,
 }
 
 impl Director<'_, '_> {
     /// ループの1回。進行中の作業計画書があればそれを、無ければロードマップの並びの先頭の作業計画書を進める。
     fn tick(&mut self, cancel: &AtomicBool) -> Result<Pace, Error> {
-        let mut active = self.store.active()?;
+        let plans = self.store.plans()?;
+        // 取り込まれていないことは作業報告書の確認を待つ間にだけ確かめるため、
+        // その待ちを `resume` などで離れた作業計画書の知らせは、解けたものとして片付ける。
+        // 前の回までに解けて片付けられなかった知らせも、ここで片付け直す。
+        self.settle(|notice| {
+            notice.kind == NoticeKind::NotMerged
+                && !plans.iter().any(|(_, state)| {
+                    state.title == notice.plan
+                        && state
+                            .wait
+                            .as_ref()
+                            .is_some_and(|wait| wait.kind == WaitKind::Report)
+                })
+        })?;
+        // 完了を記録した作業計画書の項目も、片付けを終えるまで残るため、完了したものも含めて片付ける。
+        self.tidy(&plans)?;
+        let mut active: Vec<(String, PlanState)> = plans
+            .into_iter()
+            .filter(|(_, state)| !state.is_completed())
+            .collect();
         let (name, state) = match active.len() {
             0 => match self.begin()? {
                 Some(begun) => begun,
@@ -339,9 +400,19 @@ impl Director<'_, '_> {
                 ));
             }
         };
-        match &state.wait {
-            Some(wait) => self.waiting(&name, &state, wait),
-            None => self.advance(&name, cancel),
+        if let Some(wait) = &state.wait {
+            let page = self.stack(&name, &state, wait)?;
+            if let Some(page) = &page
+                && self.receive(&name, &state, wait, page)?
+            {
+                return Ok(Pace::Continue);
+            }
+            self.alert(&name, &state, wait, page.as_ref())?;
+            self.waiting(&name, &state, wait, page.as_ref())
+        } else {
+            // 作業へ戻ったあと同じ内容で待っても、新しく始まった待ちとしてベルを鳴らす。
+            self.rung.clear();
+            self.advance(&name, cancel)
         }
     }
 
@@ -352,15 +423,31 @@ impl Director<'_, '_> {
         let entries = roadmap::load(self.start.runner, &self.config, &self.store)?;
         let (url, name) = match queue::head(&entries) {
             Head::Empty => {
+                self.rung.clear();
+                self.settle(|notice| notice.kind == NoticeKind::PlanUnreadable)?;
+                self.title(&format!("{TITLE_PREFIX} - 進める作業計画書なし"))?;
                 self.notice("進める作業計画書がありません。ロードマップの承認の節に作業計画書が現れるのを待ちます".to_owned())?;
                 return Ok(None);
             }
             Head::Blocked(entry) => {
+                let plan = &entry.candidate.link.title;
+                self.settle(|notice| {
+                    notice.kind == NoticeKind::PlanUnreadable && &notice.plan != plan
+                })?;
+                self.title(&format!(
+                    "{TITLE_PREFIX} - 人間待ち - {}",
+                    Scene::PlanUnreadable.label()
+                ))?;
+                self.raise(NoticeKind::PlanUnreadable, plan, |project, at| {
+                    item::plan_unreadable(project, entry, at)
+                })?;
+                self.ring(&format!("{}\n{plan}", Scene::PlanUnreadable.label()))?;
                 self.notice(blocked(entry))?;
                 return Ok(None);
             }
             Head::Start { url, name } => (url.to_owned(), name.to_owned()),
         };
+        self.settle(|notice| notice.kind == NoticeKind::PlanUnreadable)?;
         let title = entries
             .first()
             .map(|entry| entry.candidate.link.title.clone())
@@ -383,10 +470,17 @@ impl Director<'_, '_> {
         Ok(Some((name, state)))
     }
 
-    /// 人間を待っている作業計画書nameの理由を表示する。
+    /// 人間を待っている作業計画書nameの理由と、人間キューに積んだ項目のページpageを表示する。
     ///
     /// 作業報告書の確認を待っているときは、ロードマップを読み直す間隔ごとに完了を確かめ、完了していれば記録する。
-    fn waiting(&mut self, name: &str, state: &PlanState, wait: &Wait) -> Result<Pace, Error> {
+    /// ブランチが取り込まれていなければ、人間キューに知らせの項目を積み、取り込まれるか完了とみなす節から外れたら片付ける。
+    fn waiting(
+        &mut self,
+        name: &str,
+        state: &PlanState,
+        wait: &Wait,
+        page: Option<&ItemPage>,
+    ) -> Result<Pace, Error> {
         let mut text = format!(
             "{name}: 人間を待っています ({}): {}",
             wait.kind.label(),
@@ -396,32 +490,50 @@ impl Director<'_, '_> {
             text.push_str("\n  ");
             text.push_str(detail);
         }
+        if let Some(page) = page {
+            text.push_str("\n  人間キューの項目: ");
+            text.push_str(&page.url);
+        }
         if wait.kind != WaitKind::Report {
             text.push_str("\n  対応したら korylusfactory resume を実行してください");
         }
         self.notice(text)?;
         if wait.kind == WaitKind::Report && self.roadmap_due() {
             self.roadmap_read = Some(self.start.clock.now());
+            let not_merged = |notice: &state::Notice| {
+                notice.kind == NoticeKind::NotMerged && notice.plan == state.title
+            };
             match completion::check(self.start.runner, &self.config, state) {
-                Ok(Completion::Done) => return self.complete(name),
-                Ok(Completion::NotListed) => {}
+                Ok(Completion::Done) => {
+                    self.settle(not_merged)?;
+                    return self.complete(name);
+                }
+                Ok(Completion::NotListed) => self.settle(not_merged)?,
                 Ok(Completion::Unmerged(branches)) => {
+                    let lines: Vec<String> = branches
+                        .iter()
+                        .map(|branch| {
+                            let note = if branch.missing {
+                                "。ローカルにありません"
+                            } else {
+                                ""
+                            };
+                            format!(
+                                "{} {} ({}{note})",
+                                branch.repo.display(),
+                                branch.branch,
+                                branch.into
+                            )
+                        })
+                        .collect();
+                    self.raise(NoticeKind::NotMerged, &state.title, |project, at| {
+                        item::not_merged(project, name, state, lines.clone(), at)
+                    })?;
                     let mut text = format!(
                         "{name}: ロードマップの完了とみなす節にありますが、リモートの既定のベースに取り込まれていないブランチがあります"
                     );
-                    for branch in branches {
-                        let note = if branch.missing {
-                            "。ローカルにありません"
-                        } else {
-                            ""
-                        };
-                        let _ = write!(
-                            text,
-                            "\n  {} {} ({}{note})",
-                            branch.repo.display(),
-                            branch.branch,
-                            branch.into
-                        );
+                    for line in &lines {
+                        let _ = write!(text, "\n  {line}");
                     }
                     self.notice(text)?;
                 }
@@ -500,6 +612,10 @@ impl Director<'_, '_> {
         };
         lock.save(&state)?;
         drop(lock);
+        self.title(&format!(
+            "{TITLE_PREFIX} - {name} - {}",
+            describe_next(&next)
+        ))?;
         session::run(self, &dir, name, &state, &next, launch, cancel)
     }
 
